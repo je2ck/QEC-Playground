@@ -8,7 +8,6 @@ use super::simulator::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use fusion_blossom::pointers::UnsafePtr;
 // use super::erasure_graph::*;
 use super::decoder_mwpm::*;
 use super::derivative::*;
@@ -93,7 +92,9 @@ pub mod fusion_default_configs {
     pub fn log_matchings() -> bool {
         false
     }
-    pub fn max_tree_size() -> usize { usize::MAX }
+    pub fn max_tree_size() -> usize {
+        usize::MAX
+    }
 }
 
 impl FusionDecoder {
