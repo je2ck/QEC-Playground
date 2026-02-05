@@ -843,6 +843,38 @@ impl SimulatorGenerics for Simulator {
         let mut rng = self.rng.clone(); // avoid mutable borrow
         let mut error_count = 0;
         let mut erasure_count = 0;
+
+        // Ancilla loss model: track which ancillas are lost
+        // Key: (i, j) position, Value: round when loss occurred (0 = lost from start)
+        let mut ancilla_lost: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+        let ancilla_loss_prob = noise_model.ancilla_loss_probability;
+        let measurement_cycles = noise_model.measurement_cycles;
+
+        // Pre-generate ancilla loss events if ancilla_loss_probability > 0
+        if ancilla_loss_prob > 0. && measurement_cycles > 0 {
+            // Find all ancilla positions and determine when they are lost
+            for i in 0..self.vertical {
+                for j in 0..self.horizontal {
+                    // Check if this is an ancilla position (check at t=0 or first valid position)
+                    if let Some(ref node) = self.nodes[0][i][j] {
+                        if node.qubit_type != QubitType::Data {
+                            // This is an ancilla qubit
+                            // Determine in which round it gets lost (if at all)
+                            let num_rounds = self.height / measurement_cycles;
+                            for round in 0..num_rounds {
+                                let random_loss = rng.next_f64();
+                                if random_loss < ancilla_loss_prob {
+                                    // Lost in this round - mark and stop checking further rounds
+                                    ancilla_lost.insert((i, j), round);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // first apply single-qubit and two-qubit correlated errors
         simulator_iter_mut!(self, position, node, {
             let noise_model_node = noise_model.get_node_unwrap(position);
@@ -870,6 +902,18 @@ impl SimulatorGenerics for Simulator {
             if random_erasure < noise_model_node.erasure_error_rate {
                 pending_erasure_errors.push(position.clone());
             }
+
+            // Ancilla loss model: mark lost ancilla measurements as erasures
+            if ancilla_loss_prob > 0. && measurement_cycles > 0 && node.qubit_type != QubitType::Data {
+                if let Some(&loss_round) = ancilla_lost.get(&(position.i, position.j)) {
+                    let current_round = position.t / measurement_cycles;
+                    // Only mark erasure at measurement layers
+                    if current_round >= loss_round && position.t % measurement_cycles == 0 {
+                        pending_erasure_errors.push(position.clone());
+                    }
+                }
+            }
+
             match &noise_model_node.correlated_pauli_error_rates {
                 Some(correlated_pauli_error_rates) => {
                     let random_pauli = rng.next_f64();

@@ -97,7 +97,10 @@ impl ErasureGraph {
             let possible_erasure_error =
                 noise_model_node.erasure_error_rate > 0. || noise_model_node.correlated_erasure_error_rates.is_some() || {
                     let node = simulator.get_node_unwrap(position);
-                    if let Some(gate_peer) = node.gate_peer.as_ref() {
+                    // Include ancilla positions if ancilla loss is enabled
+                    if noise_model.ancilla_loss_probability > 0. && node.qubit_type != QubitType::Data {
+                        true
+                    } else if let Some(gate_peer) = node.gate_peer.as_ref() {
                         let peer_noise_model_node = noise_model.get_node_unwrap(gate_peer);
                         if let Some(correlated_erasure_error_rates) = &peer_noise_model_node.correlated_erasure_error_rates {
                             correlated_erasure_error_rates.error_probability() > 0.

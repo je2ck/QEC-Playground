@@ -21,6 +21,14 @@ pub struct NoiseModel {
     pub nodes: Vec<Vec<Vec<Option<Arc<NoiseModelNode>>>>>,
     /// additional noise that are unknown to the decoder, could be anything
     pub additional_noise: Vec<AdditionalNoise>,
+    /// Ancilla loss probability per round (1 - survival probability)
+    /// Once an ancilla is lost, it stays lost for all subsequent rounds
+    /// Lost ancilla measurements are treated as erasures
+    #[serde(default)]
+    pub ancilla_loss_probability: f64,
+    /// Number of measurement cycles (for ancilla loss model)
+    #[serde(default = "default_measurement_cycles")]
+    pub measurement_cycles: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +158,8 @@ impl NoiseModel {
                 })
                 .collect(),
             additional_noise: vec![],
+            ancilla_loss_probability: 0.,
+            measurement_cycles: simulator.measurement_cycles,
         }
     }
 }
@@ -282,4 +292,9 @@ pub(crate) fn register(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<NoiseModelNode>()?;
     m.add_class::<AdditionalNoise>()?;
     Ok(())
+}
+
+/// Default measurement cycles (surface code circuit level: 6 time steps per round)
+fn default_measurement_cycles() -> usize {
+    6
 }

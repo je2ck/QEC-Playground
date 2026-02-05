@@ -608,6 +608,11 @@ impl NoiseModelBuilder {
                 let mut use_correlated_pauli = false;
                 let mut before_pauli_bug_fix = false;
                 let mut erasure_delay_cycle = 0;
+                // Ancilla loss model:
+                //   ancilla_loss_probability = 1 - Ps (probability of losing ancilla each round)
+                //   Once lost, ancilla stays lost for all subsequent rounds
+                //   Lost ancilla measurements are treated as erasures
+                let mut ancilla_loss_probability = 0.; // 1 - Ps (per round)
                 let mut config_cloned = noise_model_configuration.clone();
                 let config = config_cloned
                     .as_object_mut()
@@ -637,6 +642,12 @@ impl NoiseModelBuilder {
                     // erasures that are not corrected immediately, instead an erasure may stay
                     // for `delay_cycle` cycles and all qubits that are related will be effected.
                     erasure_delay_cycle = value.as_u64().expect("u64") as usize;
+                }
+                if let Some(value) = config.remove("ancilla_loss_probability") {
+                    // Probability of losing an ancilla qubit each round (1 - survival probability)
+                    // Once lost, the ancilla stays lost for all subsequent rounds
+                    // Lost ancilla measurements are marked as erasures
+                    ancilla_loss_probability = value.as_f64().expect("f64");
                 }
                 if !config.is_empty() {
                     panic!("unknown keys: {:?}", config.keys().collect::<Vec<&String>>());
@@ -846,6 +857,9 @@ impl NoiseModelBuilder {
                         }
                     }
                 });
+                // Set ancilla loss probability in noise model for use during simulation
+                noise_model.ancilla_loss_probability = ancilla_loss_probability;
+                noise_model.measurement_cycles = simulator.measurement_cycles;
             }
             Self::StimNoiseModel => {
                 let mut after_clifford_depolarization = p;
