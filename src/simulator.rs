@@ -933,7 +933,7 @@ impl SimulatorGenerics for Simulator {
                 error_count += 1;
             }
         }
-        // apply pending erasure errors, amd generate random pauli error because of those erasures
+        // apply pending erasure errors, and generate random pauli error because of those erasures
         for position in pending_erasure_errors.iter() {
             let node = self.get_node_mut_unwrap(position);
             if !node.has_erasure {
@@ -944,9 +944,23 @@ impl SimulatorGenerics for Simulator {
             if node.error != I {
                 error_count -= 1;
             }
+            // Check if there's a custom pauli distribution for erasure
+            let noise_model_node = noise_model.get_node_unwrap(position);
             let random_erasure = rng.next_f64();
-            node.set_error_temp(
-                &(if random_erasure < 0.25 {
+            let new_error = if let Some(pp_given_e) = &noise_model_node.pauli_error_rates_given_erasure {
+                // Use custom conditional pauli rates
+                if random_erasure < pp_given_e.error_rate_X {
+                    X
+                } else if random_erasure < pp_given_e.error_rate_X + pp_given_e.error_rate_Z {
+                    Z
+                } else if random_erasure < pp_given_e.error_probability() {
+                    Y
+                } else {
+                    I
+                }
+            } else {
+                // Default: uniform 25% each for X, Z, Y, I
+                if random_erasure < 0.25 {
                     X
                 } else if random_erasure < 0.5 {
                     Z
@@ -954,8 +968,9 @@ impl SimulatorGenerics for Simulator {
                     Y
                 } else {
                     I
-                }),
-            );
+                }
+            };
+            node.set_error_temp(&new_error);
             if node.error != I {
                 error_count += 1;
             };

@@ -72,6 +72,10 @@ pub struct NoiseModelNode {
     pub pauli_error_rates: PauliErrorRates,
     #[serde(rename = "pe")]
     pub erasure_error_rate: f64,
+    /// Pauli error rates conditional on erasure occurring (optional, defaults to uniform 25% each if None)
+    /// Used for measurement erasure model where P(error|erasure) may differ from 25%
+    #[serde(rename = "pp_given_e", skip_serializing_if = "Option::is_none")]
+    pub pauli_error_rates_given_erasure: Option<PauliErrorRates>,
     #[serde(rename = "corr_pp")]
     pub correlated_pauli_error_rates: Option<CorrelatedPauliErrorRates>,
     #[serde(rename = "corr_pe")]
@@ -92,6 +96,7 @@ impl NoiseModelNode {
         Self {
             pauli_error_rates: PauliErrorRates::default(),
             erasure_error_rate: 0.,
+            pauli_error_rates_given_erasure: None,
             correlated_pauli_error_rates: None,
             correlated_erasure_error_rates: None,
         }

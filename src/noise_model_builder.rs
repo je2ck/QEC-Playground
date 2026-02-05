@@ -598,6 +598,12 @@ impl NoiseModelBuilder {
                 assert_eq!(bias_eta, 0.5, "bias not supported yet, please use the default value 0.5");
                 let mut initialization_error_rate = 0.;
                 let mut measurement_error_rate = 0.;
+                // Measurement erasure model:
+                //   measurement_error_rate_with_erasure = Pm * Rm (erasure detected, Pauli error exists)
+                //   measurement_error_rate = Pm * (1 - Rm) (no erasure, Pauli error hidden)
+                //   measurement_erasure_rate_no_error = (1 - Pm) * Rc (erasure detected, no error)
+                let mut measurement_error_rate_with_erasure = 0.; // Pm * Rm
+                let mut measurement_erasure_rate_no_error = 0.; // (1-Pm) * Rc
                 let mut use_correlated_erasure = false;
                 let mut use_correlated_pauli = false;
                 let mut before_pauli_bug_fix = false;
@@ -611,6 +617,12 @@ impl NoiseModelBuilder {
                 }
                 if let Some(value) = config.remove("measurement_error_rate") {
                     measurement_error_rate = value.as_f64().expect("f64");
+                }
+                if let Some(value) = config.remove("measurement_error_rate_with_erasure") {
+                    measurement_error_rate_with_erasure = value.as_f64().expect("f64");
+                }
+                if let Some(value) = config.remove("measurement_erasure_rate_no_error") {
+                    measurement_erasure_rate_no_error = value.as_f64().expect("f64");
                 }
                 if let Some(value) = config.remove("use_correlated_erasure") {
                     use_correlated_erasure = value.as_bool().expect("bool");
@@ -755,11 +767,17 @@ impl NoiseModelBuilder {
                             } else {
                                 (p / 3., p / 3., p / 3.)
                             };
+                            // Measurement error model for ancilla qubits (applied at measurement stage - 1)
+                            // Model: Pm = total measurement error probability
+                            //   measurement_error_rate = Pm * (1 - Rm): Pauli error only (not detected)
+                            //   measurement_error_rate_with_erasure = Pm * Rm: erasure + Pauli error (detected)
+                            //   measurement_erasure_rate_no_error = (1 - Pm) * Rc: erasure only, no error (false positive)
+                            let mut this_meas_err_with_erasure = 0.;
+                            let mut this_meas_erasure_no_error = 0.;
                             if position.t % simulator.measurement_cycles == simulator.measurement_cycles - 1
                                 && node.qubit_type != QubitType::Data
                             {
-                                // add additional measurement error
-                                // whether it's X axis measurement or Z axis measurement, the additional error rate is always `measurement_error_rate`
+                                // 1. Measurement error without erasure (hidden error): Pm * (1 - Rm)
                                 px_py_pz = ErrorType::combine_probability(
                                     px_py_pz,
                                     (
@@ -768,11 +786,41 @@ impl NoiseModelBuilder {
                                         measurement_error_rate / 2.,
                                     ),
                                 );
+                                // 2. Store erasure-related rates for later processing
+                                this_meas_err_with_erasure = measurement_error_rate_with_erasure;
+                                this_meas_erasure_no_error = measurement_erasure_rate_no_error;
                             }
                             let (px, py, pz) = px_py_pz;
                             error_node.pauli_error_rates.error_rate_X = px;
                             error_node.pauli_error_rates.error_rate_Y = py;
                             error_node.pauli_error_rates.error_rate_Z = pz;
+                            // Apply measurement erasure model using conditional pauli rates
+                            // Total erasure rate = this_meas_err_with_erasure + this_meas_erasure_no_error
+                            // P(error | erasure) = this_meas_err_with_erasure / total_erasure
+                            let total_meas_erasure = this_meas_err_with_erasure + this_meas_erasure_no_error;
+                            if total_meas_erasure > 0. {
+                                error_node.erasure_error_rate = total_meas_erasure;
+                                // Set conditional pauli rates for when erasure occurs
+                                // P(X|erasure) = P(Z|erasure) = P(Y|erasure) = P(error|erasure) / 3
+                                // P(I|erasure) = 1 - P(error|erasure)
+                                let p_error_given_erasure = this_meas_err_with_erasure / total_meas_erasure;
+                                let p_each_pauli = p_error_given_erasure / 3.0;
+                                error_node.pauli_error_rates_given_erasure = Some(PauliErrorRates {
+                                    error_rate_X: p_each_pauli,
+                                    error_rate_Y: p_each_pauli,
+                                    error_rate_Z: p_each_pauli,
+                                });
+                                // Ensure minimum pauli rate for erasure graph construction
+                                if error_node.pauli_error_rates.error_rate_X == 0. {
+                                    error_node.pauli_error_rates.error_rate_X = 1e-300;
+                                }
+                                if error_node.pauli_error_rates.error_rate_Y == 0. {
+                                    error_node.pauli_error_rates.error_rate_Y = 1e-300;
+                                }
+                                if error_node.pauli_error_rates.error_rate_Z == 0. {
+                                    error_node.pauli_error_rates.error_rate_Z = 1e-300;
+                                }
+                            }
                             if pe > 0. {
                                 // need to set minimum pauli error when this is subject to erasure
                                 if error_node.pauli_error_rates.error_rate_X == 0. {
