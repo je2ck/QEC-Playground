@@ -387,7 +387,18 @@ def plot_comparison(results_soft, results_no_erasure,
     ax.set_yscale('log')
     ax.set_xlabel('Physical error probability, $p$', fontsize=14)
     ax.set_ylabel('Logical error rate, $p_L$', fontsize=14)
-    ax.set_xlim(1e-4, 2e-1)
+
+    # Auto-adapt xlim to data range
+    all_p = []
+    for d in code_distances:
+        if d in results_soft:
+            all_p.extend(results_soft[d]["p"])
+        if d in results_no_erasure:
+            all_p.extend(results_no_erasure[d]["p"])
+    if all_p:
+        ax.set_xlim(min(all_p) * 0.5, max(all_p) * 2)
+    else:
+        ax.set_xlim(1e-4, 2e-1)
     ax.set_ylim(1e-6, 1)
     ax.legend(loc='upper left', fontsize=10, framealpha=0.9)
     ax.grid(True, which='major', linestyle='-', alpha=0.3)
@@ -451,6 +462,10 @@ if __name__ == "__main__":
                         help='List available exposures and exit')
     parser.add_argument('--max-half-weight', type=int, default=1,
                         help='UF decoder max_half_weight (default: 1)')
+    parser.add_argument('--p-range', type=float, nargs=2, default=None,
+                        metavar=('LOG_MIN', 'LOG_MAX'),
+                        help='p sweep range as log10 values (e.g. --p-range -5 -3 for 1e-5..1e-3). '
+                             'Default: -4 -1')
     parser.add_argument('--data-dir', default=None,
                         help='Directory for saving/loading result files')
     parser.add_argument('--output', default=None,
@@ -519,15 +534,20 @@ if __name__ == "__main__":
 
     mhw = args.max_half_weight
 
+    # p sweep range
+    p_log_min, p_log_max = (args.p_range if args.p_range else [-4, -1])
+
     if args.mode in ('quick', 'full'):
         if args.mode == 'quick':
             code_distances = [5, 7, 9, 11]
             runtime_budget = (300, 45)
-            p_sweep = np.logspace(-4, -1, 12)
+            p_sweep = np.logspace(p_log_min, p_log_max, 12)
         else:  # full
             code_distances = [5, 7, 9, 11, 13]
             runtime_budget = (1000, 180)
-            p_sweep = np.logspace(-4, -1, 20)
+            p_sweep = np.logspace(p_log_min, p_log_max, 20)
+
+        print(f"  p sweep: {p_sweep[0]:.2e} .. {p_sweep[-1]:.2e} ({len(p_sweep)} points)")
 
         p_list = p_sweep.tolist()
 
