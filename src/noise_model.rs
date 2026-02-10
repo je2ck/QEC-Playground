@@ -88,6 +88,22 @@ pub struct NoiseModelNode {
     pub correlated_pauli_error_rates: Option<CorrelatedPauliErrorRates>,
     #[serde(rename = "corr_pe")]
     pub correlated_erasure_error_rates: Option<CorrelatedErasureErrorRates>,
+    /// Multi-class erasure model: each class has its own erasure rate, decoder weight, and conditional Pauli rates.
+    /// When present, the simulator uses this instead of the single erasure_error_rate for sampling.
+    /// erasure_error_rate is still set to the total rate (sum of all class rates) for erasure graph construction.
+    #[serde(rename = "ec", skip_serializing_if = "Option::is_none")]
+    pub erasure_classes: Option<Vec<ErasureClassInfo>>,
+}
+
+/// Information for one erasure confidence class
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErasureClassInfo {
+    /// probability of this class erasure occurring: Pm * Rm_k + (1-Pm) * Rc_k
+    pub erasure_rate: f64,
+    /// Bayes weight for decoder: P(error | class k erasure) = Pm * Rm_k / (Pm * Rm_k + (1-Pm) * Rc_k)
+    pub erasure_weight: f64,
+    /// conditional Pauli error rates given this class erasure
+    pub pauli_error_rates_given_erasure: PauliErrorRates,
 }
 
 impl Default for NoiseModelNode {
@@ -107,6 +123,7 @@ impl NoiseModelNode {
             pauli_error_rates_given_erasure: None,
             correlated_pauli_error_rates: None,
             correlated_erasure_error_rates: None,
+            erasure_classes: None,
         }
     }
 

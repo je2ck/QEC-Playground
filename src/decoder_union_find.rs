@@ -465,8 +465,8 @@ impl UnionFindDecoder {
         };
         // load the erasure information
         if !sparse_detected_erasures.is_empty() {
-            let erasure_edges = sparse_detected_erasures.get_erasure_edges(&self.erasure_graph);
-            for erasure_edge in erasure_edges.iter() {
+            let erasure_edges = sparse_detected_erasures.get_weighted_erasure_edges(&self.erasure_graph);
+            for (erasure_edge, weight) in erasure_edges.iter() {
                 match erasure_edge {
                     ErasureEdge::Connection(position1, position2) => {
                         let index1 = self.position_to_index[position1];
@@ -475,12 +475,21 @@ impl UnionFindDecoder {
                         let neighbor = node1.index_to_neighbor(&index2).expect("neighbor must exist");
                         let neighbor_edge_ptr = &node1.neighbors[neighbor].1;
                         let mut neighbor_edge = neighbor_edge_ptr.write();
-                        neighbor_edge.increased = neighbor_edge.length;
+                        // soft erasure: increased proportional to weight
+                        // weight=1.0 → full merge (existing behavior), weight=0.5 → half merge
+                        let increase = ((*weight) * neighbor_edge.length as f64).round() as usize;
+                        if increase > neighbor_edge.increased {
+                            neighbor_edge.increased = increase;
+                        }
                     }
                     ErasureEdge::Boundary(position) => {
                         let index = self.position_to_index[position];
                         let node = self.nodes.get_mut(index).unwrap();
-                        node.boundary_increased = node.boundary_length.expect("boundary must exist");
+                        let boundary_length = node.boundary_length.expect("boundary must exist");
+                        let increase = ((*weight) * boundary_length as f64).round() as usize;
+                        if increase > node.boundary_increased {
+                            node.boundary_increased = increase;
+                        }
                     }
                 }
             }

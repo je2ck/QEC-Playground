@@ -604,6 +604,8 @@ impl NoiseModelBuilder {
                 //   measurement_erasure_rate_no_error = (1 - Pm) * Rc (erasure detected, no error)
                 let mut measurement_error_rate_with_erasure = 0.; // Pm * Rm
                 let mut measurement_erasure_rate_no_error = 0.; // (1-Pm) * Rc
+                let mut measurement_error_rate_total: Option<f64> = None; // Pm (total measurement error prob)
+                let mut erasure_classes_config: Option<Vec<serde_json::Value>> = None; // [{"Rm": .., "Rc": ..}, ...]
                 let mut use_correlated_erasure = false;
                 let mut use_correlated_pauli = false;
                 let mut before_pauli_bug_fix = false;
@@ -628,6 +630,12 @@ impl NoiseModelBuilder {
                 }
                 if let Some(value) = config.remove("measurement_erasure_rate_no_error") {
                     measurement_erasure_rate_no_error = value.as_f64().expect("f64");
+                }
+                if let Some(value) = config.remove("measurement_error_rate_total") {
+                    measurement_error_rate_total = Some(value.as_f64().expect("f64"));
+                }
+                if let Some(value) = config.remove("erasure_classes") {
+                    erasure_classes_config = Some(value.as_array().expect("erasure_classes must be array").clone());
                 }
                 if let Some(value) = config.remove("use_correlated_erasure") {
                     use_correlated_erasure = value.as_bool().expect("bool");
@@ -785,21 +793,65 @@ impl NoiseModelBuilder {
                             //   measurement_erasure_rate_no_error = (1 - Pm) * Rc: erasure only, no error (false positive)
                             let mut this_meas_err_with_erasure = 0.;
                             let mut this_meas_erasure_no_error = 0.;
+                            let mut this_erasure_classes: Option<Vec<ErasureClassInfo>> = None;
                             if position.t % simulator.measurement_cycles == simulator.measurement_cycles - 1
                                 && node.qubit_type != QubitType::Data
                             {
-                                // 1. Measurement error without erasure (hidden error): Pm * (1 - Rm)
-                                px_py_pz = ErrorType::combine_probability(
-                                    px_py_pz,
-                                    (
-                                        measurement_error_rate / 2.,
-                                        measurement_error_rate / 2.,
-                                        measurement_error_rate / 2.,
-                                    ),
-                                );
-                                // 2. Store erasure-related rates for later processing
-                                this_meas_err_with_erasure = measurement_error_rate_with_erasure;
-                                this_meas_erasure_no_error = measurement_erasure_rate_no_error;
+                                if let Some(ref classes_cfg) = erasure_classes_config {
+                                    // Multi-class erasure model
+                                    let pm = measurement_error_rate_total
+                                        .expect("measurement_error_rate_total (Pm) required when using erasure_classes");
+                                    let mut sum_rm = 0.;
+                                    let mut classes = Vec::new();
+                                    for class_val in classes_cfg {
+                                        let rm_k = class_val["Rm"].as_f64().expect("Rm must be f64");
+                                        let rc_k = class_val["Rc"].as_f64().expect("Rc must be f64");
+                                        sum_rm += rm_k;
+                                        let err_rate = pm * rm_k + (1. - pm) * rc_k;
+                                        let weight_k = if err_rate > 0. { pm * rm_k / err_rate } else { 0. };
+                                        let p_each_pauli = weight_k / 3.0;
+                                        classes.push(ErasureClassInfo {
+                                            erasure_rate: err_rate,
+                                            erasure_weight: weight_k,
+                                            pauli_error_rates_given_erasure: PauliErrorRates {
+                                                error_rate_X: p_each_pauli,
+                                                error_rate_Y: p_each_pauli,
+                                                error_rate_Z: p_each_pauli,
+                                            },
+                                        });
+                                    }
+                                    assert!(sum_rm <= 1.0 + 1e-10, "sum of Rm_k ({}) exceeds 1.0", sum_rm);
+                                    // Normalize erasure_weight so that max class = 1.0
+                                    // This way the highest-confidence class gets full erasure pre-growth in the decoder,
+                                    // while pauli_error_rates_given_erasure remains the true Bayes probability.
+                                    let max_weight = classes.iter().map(|c| c.erasure_weight).fold(0.0_f64, f64::max);
+                                    if max_weight > 0. {
+                                        for c in classes.iter_mut() {
+                                            c.erasure_weight /= max_weight;
+                                        }
+                                    }
+                                    // Hidden measurement error: Pm * (1 - sum_Rm)
+                                    let hidden_rate = pm * (1. - sum_rm).max(0.);
+                                    px_py_pz = ErrorType::combine_probability(
+                                        px_py_pz,
+                                        (hidden_rate / 2., hidden_rate / 2., hidden_rate / 2.),
+                                    );
+                                    this_erasure_classes = Some(classes);
+                                } else {
+                                    // Single-class erasure model (existing behavior)
+                                    // 1. Measurement error without erasure (hidden error): Pm * (1 - Rm)
+                                    px_py_pz = ErrorType::combine_probability(
+                                        px_py_pz,
+                                        (
+                                            measurement_error_rate / 2.,
+                                            measurement_error_rate / 2.,
+                                            measurement_error_rate / 2.,
+                                        ),
+                                    );
+                                    // 2. Store erasure-related rates for later processing
+                                    this_meas_err_with_erasure = measurement_error_rate_with_erasure;
+                                    this_meas_erasure_no_error = measurement_erasure_rate_no_error;
+                                }
                             }
                             let (px, py, pz) = px_py_pz;
                             error_node.pauli_error_rates.error_rate_X = px;
@@ -821,6 +873,23 @@ impl NoiseModelBuilder {
                                     error_rate_Y: p_each_pauli,
                                     error_rate_Z: p_each_pauli,
                                 });
+                                // Ensure minimum pauli rate for erasure graph construction
+                                if error_node.pauli_error_rates.error_rate_X == 0. {
+                                    error_node.pauli_error_rates.error_rate_X = 1e-300;
+                                }
+                                if error_node.pauli_error_rates.error_rate_Y == 0. {
+                                    error_node.pauli_error_rates.error_rate_Y = 1e-300;
+                                }
+                                if error_node.pauli_error_rates.error_rate_Z == 0. {
+                                    error_node.pauli_error_rates.error_rate_Z = 1e-300;
+                                }
+                            }
+                            // Multi-class erasure model: set erasure_classes on the node
+                            if let Some(classes) = this_erasure_classes {
+                                // Set erasure_error_rate to total for erasure graph construction
+                                let total_rate: f64 = classes.iter().map(|c| c.erasure_rate).sum();
+                                error_node.erasure_error_rate = total_rate;
+                                error_node.erasure_classes = Some(classes);
                                 // Ensure minimum pauli rate for erasure graph construction
                                 if error_node.pauli_error_rates.error_rate_X == 0. {
                                     error_node.pauli_error_rates.error_rate_X = 1e-300;

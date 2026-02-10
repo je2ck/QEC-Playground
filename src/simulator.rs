@@ -174,6 +174,10 @@ pub struct SimulatorNode {
     pub error: ErrorType,
     #[cfg_attr(feature = "python_binding", pyo3(get, set))]
     pub has_erasure: bool,
+    /// soft erasure weight in range [0.0, 1.0]: continuous confidence level for erasure.
+    /// 1.0 = full erasure (binary-compatible), 0.0 = no erasure, intermediate values = partial confidence.
+    #[cfg_attr(feature = "python_binding", pyo3(get, set))]
+    pub erasure_weight: f64,
     #[cfg_attr(feature = "python_binding", pyo3(get, set))]
     pub propagated: ErrorType,
     /// Virtual qubit doesn't physically exist, which means they will never have errors themselves.
@@ -204,6 +208,7 @@ impl SimulatorNode {
             gate_peer: gate_peer.map(Arc::new),
             error: I,
             has_erasure: false,
+            erasure_weight: 0.0,
             propagated: I,
             is_virtual: false,
             is_peer_virtual: false,
@@ -530,6 +535,7 @@ impl Simulator {
         simulator_iter_mut!(self, position, node, {
             node.error = I;
             node.has_erasure = false;
+            node.erasure_weight = 0.0;
             node.propagated = I;
         });
     }
@@ -837,7 +843,7 @@ impl SimulatorGenerics for Simulator {
         // this size is small compared to the simulator itself
         let allocate_size = self.height * self.vertical * self.horizontal;
         let mut pending_pauli_errors = Vec::<(Position, ErrorType)>::with_capacity(allocate_size);
-        let mut pending_erasure_errors = Vec::<Position>::with_capacity(allocate_size);
+        let mut pending_erasure_errors = Vec::<(Position, f64, Option<PauliErrorRates>)>::with_capacity(allocate_size);
         // let mut pending_pauli_errors = Vec::<(Position, ErrorType)>::new();
         // let mut pending_erasure_errors = Vec::<Position>::new();
         let mut rng = self.rng.clone(); // avoid mutable borrow
@@ -898,9 +904,24 @@ impl SimulatorGenerics for Simulator {
             }
             let random_erasure = rng.next_f64();
             node.has_erasure = false;
+            node.erasure_weight = 0.0;
             node.propagated = I; // clear propagated errors
-            if random_erasure < noise_model_node.erasure_error_rate {
-                pending_erasure_errors.push(position.clone());
+            if let Some(ref classes) = noise_model_node.erasure_classes {
+                // Multi-class erasure sampling
+                let mut cumulative = 0.0;
+                for class in classes {
+                    cumulative += class.erasure_rate;
+                    if random_erasure < cumulative {
+                        pending_erasure_errors.push((
+                            position.clone(),
+                            class.erasure_weight,
+                            Some(class.pauli_error_rates_given_erasure.clone()),
+                        ));
+                        break;
+                    }
+                }
+            } else if random_erasure < noise_model_node.erasure_error_rate {
+                pending_erasure_errors.push((position.clone(), 1.0, None));
             }
 
             // Ancilla loss model: mark lost ancilla measurements as erasures
@@ -909,7 +930,7 @@ impl SimulatorGenerics for Simulator {
                     let current_round = position.t / measurement_cycles;
                     // Only mark erasure at measurement layers
                     if current_round >= loss_round && position.t % measurement_cycles == 0 {
-                        pending_erasure_errors.push(position.clone());
+                        pending_erasure_errors.push((position.clone(), 1.0, None));
                     }
                 }
             }
@@ -940,7 +961,7 @@ impl SimulatorGenerics for Simulator {
                         correlated_erasure_error_rates.generate_random_erasure_error(random_erasure);
                     let my_error = correlated_erasure_error_type.my_error();
                     if my_error {
-                        pending_erasure_errors.push(position.clone());
+                        pending_erasure_errors.push((position.clone(), 1.0, None));
                     }
                     let peer_error = correlated_erasure_error_type.peer_error();
                     if peer_error {
@@ -948,7 +969,7 @@ impl SimulatorGenerics for Simulator {
                             .gate_peer
                             .as_ref()
                             .expect("correlated erasure error must corresponds to a two-qubit gate");
-                        pending_erasure_errors.push((**gate_peer).clone());
+                        pending_erasure_errors.push(((**gate_peer).clone(), 1.0, None));
                     }
                 }
                 None => {}
@@ -959,7 +980,8 @@ impl SimulatorGenerics for Simulator {
             let random_num = rng.next_f64();
             if random_num < additional_noise.probability {
                 for position in additional_noise.erasures.iter() {
-                    pending_erasure_errors.push(position.clone());
+                    let weight = additional_noise.erasures.get_weight(position);
+                    pending_erasure_errors.push((position.clone(), weight, None));
                 }
                 for (position, error) in additional_noise.pauli_errors.iter() {
                     pending_pauli_errors.push((position.clone(), *error));
@@ -978,26 +1000,34 @@ impl SimulatorGenerics for Simulator {
             }
         }
         // apply pending erasure errors, and generate random pauli error because of those erasures
-        for position in pending_erasure_errors.iter() {
+        for (position, weight, class_pauli_rates) in pending_erasure_errors.iter() {
             let node = self.get_node_mut_unwrap(position);
             if !node.has_erasure {
                 // only counts new erasures; there might be duplicated pending erasure
                 erasure_count += 1;
             }
             node.has_erasure = true;
+            // use the higher weight if this position already has an erasure (from another source)
+            if *weight > node.erasure_weight {
+                node.erasure_weight = *weight;
+            }
             if node.error != I {
                 error_count -= 1;
             }
-            // Check if there's a custom pauli distribution for erasure
+            // Determine Pauli error rates for this erasure:
+            // 1. Class-specific rates (from multi-class model), or
+            // 2. Node-level rates (from single-class model), or
+            // 3. Default uniform 25%
             let noise_model_node = noise_model.get_node_unwrap(position);
             let random_erasure = rng.next_f64();
-            let new_error = if let Some(pp_given_e) = &noise_model_node.pauli_error_rates_given_erasure {
-                // Use custom conditional pauli rates
-                if random_erasure < pp_given_e.error_rate_X {
+            let pauli_rates = class_pauli_rates.as_ref()
+                .or(noise_model_node.pauli_error_rates_given_erasure.as_ref());
+            let new_error = if let Some(pp) = pauli_rates {
+                if random_erasure < pp.error_rate_X {
                     X
-                } else if random_erasure < pp_given_e.error_rate_X + pp_given_e.error_rate_Z {
+                } else if random_erasure < pp.error_rate_X + pp.error_rate_Z {
                     Z
-                } else if random_erasure < pp_given_e.error_probability() {
+                } else if random_erasure < pp.error_probability() {
                     Y
                 } else {
                     I
@@ -1070,6 +1100,10 @@ impl SimulatorGenerics for Simulator {
         simulator_iter_real!(self, position, node, {
             if node.has_erasure {
                 sparse_detected_erasures.erasures.insert(position.clone());
+                if node.erasure_weight < 1.0 {
+                    // only store non-default weights to save memory
+                    sparse_detected_erasures.weights.insert(position.clone(), node.erasure_weight);
+                }
             }
         });
         sparse_detected_erasures
@@ -1211,6 +1245,7 @@ impl Simulator {
     ) -> Result<(), String> {
         simulator_iter_mut!(self, position, node, {
             node.has_erasure = false;
+            node.erasure_weight = 0.0;
         });
         for position in sparse_detected_erasures.iter() {
             if !self.is_node_exist(position) {
@@ -1219,7 +1254,10 @@ impl Simulator {
             self.set_erasure_check_result(noise_model, position, true)?;
         }
         simulator_iter_mut!(self, position, node, {
-            node.has_erasure = sparse_detected_erasures.contains(position);
+            if sparse_detected_erasures.contains(position) {
+                node.has_erasure = true;
+                node.erasure_weight = sparse_detected_erasures.get_weight(position);
+            }
         });
         Ok(())
     }
@@ -1586,6 +1624,9 @@ pub struct SparseErasures {
     /// the position of the erasure errors
     #[cfg_attr(feature = "python_binding", pyo3(get, set))]
     pub erasures: BTreeSet<Position>,
+    /// soft erasure weights: position -> confidence (0.0 to 1.0)
+    /// positions not in this map default to weight 1.0 (full erasure, backward compatible)
+    pub weights: BTreeMap<Position, f64>,
 }
 
 impl Serialize for SparseErasures {
@@ -1655,6 +1696,7 @@ impl SparseErasures {
     pub fn new() -> Self {
         Self {
             erasures: BTreeSet::new(),
+            weights: BTreeMap::new(),
         }
     }
     /// the length of defect measurements
@@ -1673,6 +1715,17 @@ impl SparseErasures {
     pub fn insert_erasure(&mut self, position: &Position) -> bool {
         self.erasures.insert(position.clone())
     }
+    /// insert an erasure with a soft weight (0.0 to 1.0)
+    #[inline]
+    pub fn insert_weighted_erasure(&mut self, position: &Position, weight: f64) -> bool {
+        self.weights.insert(position.clone(), weight);
+        self.erasures.insert(position.clone())
+    }
+    /// get the weight of an erasure position (defaults to 1.0 for backward compatibility)
+    #[inline]
+    pub fn get_weight(&self, position: &Position) -> f64 {
+        self.weights.get(position).copied().unwrap_or(1.0)
+    }
 }
 
 impl SparseErasures {
@@ -1687,6 +1740,19 @@ impl SparseErasures {
             let erasure_node = erasure_graph.get_node_unwrap(erasure);
             for erasure_edge in erasure_node.erasure_edges.iter() {
                 erasure_edges.push(erasure_edge.clone());
+            }
+        }
+        erasure_edges
+    }
+    /// compute the edges with their associated erasure weights
+    /// for soft erasure: an edge's effective weight is the maximum weight among all erasure positions that affect it
+    pub fn get_weighted_erasure_edges(&self, erasure_graph: &ErasureGraph) -> Vec<(ErasureEdge, f64)> {
+        let mut erasure_edges = Vec::<(ErasureEdge, f64)>::new();
+        for erasure in self.erasures.iter() {
+            let weight = self.get_weight(erasure);
+            let erasure_node = erasure_graph.get_node_unwrap(erasure);
+            for erasure_edge in erasure_node.erasure_edges.iter() {
+                erasure_edges.push((erasure_edge.clone(), weight));
             }
         }
         erasure_edges
