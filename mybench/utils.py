@@ -5,6 +5,7 @@ Utility functions for threshold analysis
 """
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def find_crossing_point(results, d1, d2, verbose=False):
@@ -239,3 +240,149 @@ def merge_results(results1, results2):
             merged[d]["pL_dev"] = [merged[d]["pL_dev"][i] for i in sorted_idx]
     
     return merged
+
+
+# ============== Lambda Factor ==============
+
+def compute_lambda_factor(results, code_distances, p_fixed=None):
+    """
+    Compute Lambda factor: Λ(p) = pL(d_small) / pL(d_large).
+
+    At a fixed physical error rate p, Λ > 1 means error suppression
+    is working (larger code → lower logical error rate).
+
+    Args:
+        results: {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
+        code_distances: list of code distances
+        p_fixed: if given, only compute Λ at this p; otherwise compute for all p
+
+    Returns:
+        lambda_data: {(d_small, d_large): {"p": [...], "lambda": [...], "lambda_err": [...]}}
+    """
+    sorted_d = sorted(code_distances)
+    lambda_data = {}
+
+    for i in range(len(sorted_d) - 1):
+        d_small = sorted_d[i]
+        d_large = sorted_d[i + 1]
+        if d_small not in results or d_large not in results:
+            continue
+
+        p_small = np.array(results[d_small]["p"])
+        pL_small = np.array(results[d_small]["pL"])
+        pL_dev_small = np.array(results[d_small]["pL_dev"])
+
+        p_large = np.array(results[d_large]["p"])
+        pL_large = np.array(results[d_large]["pL"])
+        pL_dev_large = np.array(results[d_large]["pL_dev"])
+
+        pair_key = (d_small, d_large)
+        lambda_data[pair_key] = {"p": [], "lambda": [], "lambda_err": []}
+
+        for p_val in p_small:
+            if p_fixed is not None and not np.isclose(p_val, p_fixed, rtol=1e-4):
+                continue
+            idx_l = np.where(np.isclose(p_large, p_val, rtol=1e-6))[0]
+            if len(idx_l) == 0:
+                continue
+            idx_s = np.where(np.isclose(p_small, p_val, rtol=1e-6))[0][0]
+            idx_l = idx_l[0]
+
+            pL_s = pL_small[idx_s]
+            pL_l = pL_large[idx_l]
+
+            if pL_s <= 0 or pL_l <= 0:
+                continue
+
+            lam = pL_s / pL_l
+            # Error propagation: Λ = a/b → δΛ/Λ = sqrt((δa/a)² + (δb/b)²)
+            rel_err_s = pL_dev_small[idx_s] / pL_s if pL_s > 0 else 0
+            rel_err_l = pL_dev_large[idx_l] / pL_l if pL_l > 0 else 0
+            lam_err = lam * np.sqrt(rel_err_s**2 + rel_err_l**2)
+
+            lambda_data[pair_key]["p"].append(p_val)
+            lambda_data[pair_key]["lambda"].append(lam)
+            lambda_data[pair_key]["lambda_err"].append(lam_err)
+
+    return lambda_data
+
+
+def print_lambda_summary(lambda_data, label=""):
+    """Print Λ-factor table."""
+    if label:
+        print(f"\n{'='*70}")
+        print(f"  Λ-factor: {label}")
+        print(f"{'='*70}")
+
+    for pair_key in sorted(lambda_data.keys()):
+        d_s, d_l = pair_key
+        ld = lambda_data[pair_key]
+        if not ld["p"]:
+            continue
+        print(f"\n  d={d_s} → d={d_l}:")
+        print(f"  {'p':>12s}  {'Λ':>10s}  {'± err':>10s}  {'status':>10s}")
+        print(f"  {'-'*48}")
+        for j in range(len(ld["p"])):
+            p_val = ld["p"][j]
+            lam = ld["lambda"][j]
+            lam_err = ld["lambda_err"][j]
+            status = "✅ Λ>1" if lam > 1 else "❌ Λ≤1"
+            print(f"  {p_val:>12.4e}  {lam:>10.3f}  {lam_err:>10.3f}  {status:>10s}")
+
+
+def plot_lambda_comparison(lambda_datasets, code_distances,
+                           title="", save_path="lambda_comparison.pdf"):
+    """
+    Plot Λ(p) for multiple scenarios on separate subplots for comparison.
+
+    Each distance pair gets ONE subplot; all scenarios (e.g. soft vs no-erasure)
+    are overlaid as separate lines on that subplot.
+
+    Args:
+        lambda_datasets: list of (label, color, marker, linestyle, lambda_data) tuples
+            lambda_data = {(d_small, d_large): {"p": [...], "lambda": [...], "lambda_err": [...]}}
+        code_distances: list of code distances
+        title: overall figure title
+        save_path: output file path
+    """
+    sorted_d = sorted(code_distances)
+    all_pairs = [(sorted_d[i], sorted_d[i + 1]) for i in range(len(sorted_d) - 1)]
+    n_pairs = len(all_pairs)
+    if n_pairs == 0:
+        print("Not enough code distances to plot Λ")
+        return
+
+    fig, axes = plt.subplots(1, n_pairs, figsize=(5.5 * n_pairs, 5), squeeze=False)
+
+    for i, pair_key in enumerate(all_pairs):
+        d_s, d_l = pair_key
+        ax = axes[0][i]
+
+        for label, color, marker, ls, lam_data in lambda_datasets:
+            if pair_key not in lam_data:
+                continue
+            ld = lam_data[pair_key]
+            if not ld["p"]:
+                continue
+            ax.errorbar(ld["p"], ld["lambda"], yerr=ld["lambda_err"],
+                        fmt=marker, linestyle=ls, color=color,
+                        markersize=5, linewidth=1.5,
+                        label=label, capsize=3,
+                        markerfacecolor=color if '-' in ls else 'white',
+                        markeredgecolor=color)
+
+        ax.axhline(y=1, color='red', linestyle=':', alpha=0.5, linewidth=1)
+        ax.set_xscale('log')
+        ax.set_xlabel('Physical error rate $p$', fontsize=12)
+        ax.set_ylabel(f'$\\Lambda_{{d={d_s}\\to{d_l}}}$', fontsize=14)
+        ax.set_title(f'd={d_s} → d={d_l}', fontsize=12)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    if title:
+        fig.suptitle(title, fontsize=12, y=1.02)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"\nSaved Λ-factor plot: {save_path}")
+    plt.show()

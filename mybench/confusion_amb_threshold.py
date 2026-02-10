@@ -56,7 +56,10 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import find_crossing_point, estimate_threshold_from_data
+from utils import (
+    find_crossing_point, estimate_threshold_from_data,
+    compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
+)
 
 
 # ============== CSV Parsing ==============
@@ -441,9 +444,9 @@ if __name__ == "__main__":
                         help='Directory containing ambiguous_zone_data_Xms.csv files')
     parser.add_argument('--exposure', type=int, default=None,
                         help='Exposure time to use')
-    parser.add_argument('--mode', choices=['params', 'quick', 'full', 'plot'],
+    parser.add_argument('--mode', choices=['params', 'quick', 'full', 'plot', 'lambda'],
                         default='params',
-                        help='Mode: params (show only), quick, full, plot')
+                        help='Mode: params (show only), quick, full, plot, lambda')
     parser.add_argument('--list-exposures', action='store_true',
                         help='List available exposures and exit')
     parser.add_argument('--max-half-weight', type=int, default=1,
@@ -555,9 +558,46 @@ if __name__ == "__main__":
                       "type": "no_erasure", "max_half_weight": mhw},
                      os.path.join(data_dir, "results_no_erasure.json"))
 
+        # ========== Λ-factor ==========
+        lambda_soft = compute_lambda_factor(results_soft, code_distances)
+        lambda_no = compute_lambda_factor(results_no, code_distances)
+        print_lambda_summary(lambda_soft, label="Soft weighted erasure")
+        print_lambda_summary(lambda_no, label="No erasure (baseline)")
+
         # ========== Plot ==========
         plot_comparison(results_soft, results_no,
                         code_distances, exp, Pm, classes, save_path=output)
+        lambda_path = output.replace('.pdf', '_lambda.pdf')
+        lambda_datasets = [
+            ('soft erasure', 'C0', 'o', '-', lambda_soft),
+            ('no erasure',   'gray', 's', '--', lambda_no),
+        ]
+        plot_lambda_comparison(
+            lambda_datasets, code_distances,
+            title=f'Λ-factor: Exposure={exp}ms, Pm={Pm:.4f}\n(Λ>1 = error suppression working)',
+            save_path=lambda_path)
+
+    elif args.mode == 'lambda':
+        # Load pre-computed results and compute Λ
+        results_soft, _ = load_results(os.path.join(data_dir, "results_soft.json"))
+        results_no, _ = load_results(os.path.join(data_dir, "results_no_erasure.json"))
+        code_distances = sorted(results_soft.keys())
+
+        lambda_soft = compute_lambda_factor(results_soft, code_distances)
+        lambda_no = compute_lambda_factor(results_no, code_distances)
+
+        print_lambda_summary(lambda_soft, label="Soft weighted erasure")
+        print_lambda_summary(lambda_no, label="No erasure (baseline)")
+
+        lambda_path = output.replace('.pdf', '_lambda.pdf')
+        lambda_datasets = [
+            ('soft erasure', 'C0', 'o', '-', lambda_soft),
+            ('no erasure',   'gray', 's', '--', lambda_no),
+        ]
+        plot_lambda_comparison(
+            lambda_datasets, code_distances,
+            title=f'Λ-factor: Exposure={exp}ms, Pm={Pm:.4f}\n(Λ>1 = error suppression working)',
+            save_path=lambda_path)
 
     elif args.mode == 'plot':
         # Load pre-computed results
@@ -571,7 +611,22 @@ if __name__ == "__main__":
         print("\n>>> No erasure: threshold estimate...")
         th_no, _ = estimate_threshold_from_data(results_no, code_distances, verbose=True)
 
+        # Λ-factor
+        lambda_soft = compute_lambda_factor(results_soft, code_distances)
+        lambda_no = compute_lambda_factor(results_no, code_distances)
+        print_lambda_summary(lambda_soft, label="Soft weighted erasure")
+        print_lambda_summary(lambda_no, label="No erasure (baseline)")
+
         plot_comparison(results_soft, results_no,
                         code_distances, exp, Pm, classes,
                         th_soft=th_soft, th_no=th_no,
                         save_path=output)
+        lambda_path = output.replace('.pdf', '_lambda.pdf')
+        lambda_datasets = [
+            ('soft erasure', 'C0', 'o', '-', lambda_soft),
+            ('no erasure',   'gray', 's', '--', lambda_no),
+        ]
+        plot_lambda_comparison(
+            lambda_datasets, code_distances,
+            title=f'Λ-factor: Exposure={exp}ms, Pm={Pm:.4f}\n(Λ>1 = error suppression working)',
+            save_path=lambda_path)
