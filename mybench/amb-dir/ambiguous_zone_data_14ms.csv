@@ -1,0 +1,4 @@
+Amplitude,Uncertainty,Category,Truth,Weight,WeightClass
+0.980269,2.9976606,FN,1,0.0,C1L
+1.0049125,4.5381637,TN,0,1.0,C8L
+0.92207474,4.726623,FN,1,1.0,C8L
