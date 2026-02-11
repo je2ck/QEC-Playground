@@ -584,3 +584,62 @@ def plot_lambda_comparison(lambda_datasets, code_distances,
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"\nSaved Λ-factor plot: {save_path}")
     plt.show()
+
+
+def resolve_parallel_workers(n):
+    """Resolve --parallel argument: 0 means use all CPU cores.
+
+    Args:
+        n: user-specified worker count (0 = all cores, 1 = sequential)
+
+    Returns:
+        int: actual number of workers
+    """
+    if n <= 0:
+        import os as _os
+        n = _os.cpu_count() or 1  # None on rare platforms → fallback to 1
+        print(f"  ⚡ --parallel 0 → using all {n} CPU cores")
+    return n
+
+
+def save_lambda_results(lambda_data, filename):
+    """Save Λ-factor data to JSON.
+
+    Args:
+        lambda_data: {(d_small, d_large): {"p": [...], "lambda": [...], "lambda_err": [...]}}
+        filename: output JSON path
+    """
+    import json as _json
+    serializable = {}
+    for (d_s, d_l), vals in lambda_data.items():
+        key = f"{d_s}_{d_l}"
+        serializable[key] = {
+            "d_small": d_s,
+            "d_large": d_l,
+            "p": [float(x) for x in vals["p"]],
+            "lambda": [float(x) for x in vals["lambda"]],
+            "lambda_err": [float(x) for x in vals["lambda_err"]],
+        }
+    with open(filename, 'w') as f:
+        _json.dump(serializable, f, indent=2)
+    print(f"Saved Λ-factor data: {filename}")
+
+
+def load_lambda_results(filename):
+    """Load Λ-factor data from JSON.
+
+    Returns:
+        {(d_small, d_large): {"p": [...], "lambda": [...], "lambda_err": [...]}}
+    """
+    import json as _json
+    with open(filename, 'r') as f:
+        data = _json.load(f)
+    lambda_data = {}
+    for key, vals in data.items():
+        pair = (vals["d_small"], vals["d_large"])
+        lambda_data[pair] = {
+            "p": vals["p"],
+            "lambda": vals["lambda"],
+            "lambda_err": vals["lambda_err"],
+        }
+    return lambda_data

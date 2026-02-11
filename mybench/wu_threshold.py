@@ -33,7 +33,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -476,8 +476,9 @@ if __name__ == "__main__":
     parser.add_argument('--output', default='wu_fig3a_threshold.pdf', help='Output file path')
     parser.add_argument('--data-dir', default='.', help='Directory for data files')
     parser.add_argument('--parallel', type=int, default=1,
-                        help='Number of parallel workers (default: 1 = sequential)')
+                        help='Number of parallel workers (0 = all cores, 1 = sequential)')
     args = parser.parse_args()
+    args.parallel = resolve_parallel_workers(args.parallel)
     
     os.makedirs(args.data_dir, exist_ok=True)
     compile_code_if_necessary()

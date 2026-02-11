@@ -36,7 +36,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -398,8 +398,9 @@ if __name__ == "__main__":
     parser.add_argument('--output', default=None, help='Output file path (default: auto-generated based on Re)')
     parser.add_argument('--data-dir', default=None, help='Directory for data files (default: results_measurement_error_ReXX)')
     parser.add_argument('--parallel', type=int, default=1,
-                        help='Number of parallel workers (default: 1 = sequential)')
+                        help='Number of parallel workers (0 = all cores, 1 = sequential)')
     args = parser.parse_args()
+    args.parallel = resolve_parallel_workers(args.parallel)
     
     # Re 값에 따라 디렉토리와 파일명 자동 설정
     Re_str = f"Re{int(args.Re*100):02d}"  # Re=0 -> "Re00", Re=0.98 -> "Re98"

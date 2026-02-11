@@ -48,7 +48,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
 
 
 # ============== CSV 파싱 ==============
@@ -382,8 +382,9 @@ if __name__ == "__main__":
     parser.add_argument('--data-dir', default=None, help='Directory for data files')
     parser.add_argument('--output', default=None, help='Output plot file path')
     parser.add_argument('--parallel', type=int, default=1,
-                        help='Number of parallel workers (default: 1 = sequential)')
+                        help='Number of parallel workers (0 = all cores, 1 = sequential)')
     args = parser.parse_args()
+    args.parallel = resolve_parallel_workers(args.parallel)
     
     # CSV 파싱
     confusion_data = parse_confusion_csv(args.csv)

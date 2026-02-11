@@ -56,7 +56,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import ProgressTracker, run_parallel_simulations, scaled_runtime_budget
+from utils import ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
 
 
 # ============== CSV Parsing (reuse from confusion_amb_threshold.py) ==============
@@ -547,8 +547,9 @@ if __name__ == "__main__":
     parser.add_argument('--output', default=None,
                         help='Output plot file path')
     parser.add_argument('--parallel', type=int, default=1,
-                        help='Number of parallel workers (default: 1 = sequential)')
+                        help='Number of parallel workers (0 = all cores, 1 = sequential)')
     args = parser.parse_args()
+    args.parallel = resolve_parallel_workers(args.parallel)
 
     # Parse confusion CSV
     confusion_data = parse_confusion_csv(args.csv)

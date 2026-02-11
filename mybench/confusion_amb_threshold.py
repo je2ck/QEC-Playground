@@ -60,6 +60,7 @@ from utils import (
     find_crossing_point, estimate_threshold_from_data,
     compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
     ProgressTracker, run_parallel_simulations, scaled_runtime_budget,
+    resolve_parallel_workers, save_lambda_results, load_lambda_results,
 )
 
 
@@ -488,8 +489,9 @@ if __name__ == "__main__":
     parser.add_argument('--output', default=None,
                         help='Output plot file path')
     parser.add_argument('--parallel', type=int, default=1,
-                        help='Number of parallel workers (default: 1 = sequential)')
+                        help='Number of parallel workers (0 = all cores, 1 = sequential)')
     args = parser.parse_args()
+    args.parallel = resolve_parallel_workers(args.parallel)
 
     # Parse confusion matrix CSV
     confusion_data = parse_confusion_csv(args.csv)
@@ -604,6 +606,8 @@ if __name__ == "__main__":
         lambda_no = compute_lambda_factor(results_no, code_distances)
         print_lambda_summary(lambda_soft, label="Soft weighted erasure")
         print_lambda_summary(lambda_no, label="No erasure (baseline)")
+        save_lambda_results(lambda_soft, os.path.join(data_dir, "lambda_soft.json"))
+        save_lambda_results(lambda_no, os.path.join(data_dir, "lambda_no.json"))
 
         # ========== Plot ==========
         plot_comparison(results_soft, results_no,
@@ -629,6 +633,8 @@ if __name__ == "__main__":
 
         print_lambda_summary(lambda_soft, label="Soft weighted erasure")
         print_lambda_summary(lambda_no, label="No erasure (baseline)")
+        save_lambda_results(lambda_soft, os.path.join(data_dir, "lambda_soft.json"))
+        save_lambda_results(lambda_no, os.path.join(data_dir, "lambda_no.json"))
 
         lambda_path = output.replace('.pdf', '_lambda.pdf')
         lambda_datasets = [
@@ -657,6 +663,8 @@ if __name__ == "__main__":
         lambda_no = compute_lambda_factor(results_no, code_distances)
         print_lambda_summary(lambda_soft, label="Soft weighted erasure")
         print_lambda_summary(lambda_no, label="No erasure (baseline)")
+        save_lambda_results(lambda_soft, os.path.join(data_dir, "lambda_soft.json"))
+        save_lambda_results(lambda_no, os.path.join(data_dir, "lambda_no.json"))
 
         plot_comparison(results_soft, results_no,
                         code_distances, exp, Pm, classes,
