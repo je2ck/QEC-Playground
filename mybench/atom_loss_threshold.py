@@ -14,6 +14,7 @@ Atom Loss Threshold Analysis
 import os
 import sys
 import json
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -33,7 +34,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -117,6 +118,7 @@ def run_threshold_analysis(pl, Re, code_distances, rough_code_distances,
     print("\n" + "="*70)
     print(f" Threshold Analysis for pl = {pl}, Re = {Re}")
     print("="*70)
+    _ta_start = time.time()
     
     simulate_func = create_simulate_func(pl, Re)
     
@@ -166,6 +168,7 @@ def run_threshold_analysis(pl, Re, code_distances, rough_code_distances,
         traceback.print_exc()
         threshold, threshold_err = None, None
     
+    print(f"\n  \u23f1  ThresholdAnalyzer finished in {format_duration(time.time() - _ta_start)}")
     return threshold, threshold_err, analyzer.collected_data_list
 
 
@@ -218,15 +221,21 @@ def run_p_sweep(pl, Re, code_distances, p_list, runtime_budget):
     
     simulate_func = create_simulate_func(pl, Re)
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-    
+
+    total_sims = len(p_list) * len(code_distances)
+    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
+
     for p in p_list:
         print(f"\n--- p = {p:.4e} ---")
         for d in code_distances:
+            tracker.begin_task()
             pL, pL_dev = simulate_func(p, d, runtime_budget, p_graph=p)
             results[d]["p"].append(p)
             results[d]["pL"].append(pL)
             results[d]["pL_dev"].append(pL_dev)
-    
+            tracker.end_task()
+
+    tracker.summary()
     return results
 
 

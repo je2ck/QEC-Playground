@@ -59,6 +59,7 @@ from threshold_analyzer import (
 from utils import (
     find_crossing_point, estimate_threshold_from_data,
     compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
+    ProgressTracker,
 )
 
 
@@ -315,14 +316,20 @@ def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget):
     """Run simulation over a sweep of physical error probabilities."""
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
 
+    total_sims = len(p_list) * len(code_distances)
+    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
+
     for p in p_list:
         print(f"\n--- p = {p:.4e} ---")
         for d in code_distances:
+            tracker.begin_task()
             pL, pL_dev = simulate_func(p, d, runtime_budget, p_graph=p)
             results[d]["p"].append(p)
             results[d]["pL"].append(pL)
             results[d]["pL_dev"].append(pL_dev)
+            tracker.end_task()
 
+    tracker.summary()
     return results
 
 
@@ -469,6 +476,9 @@ if __name__ == "__main__":
                         metavar=('LOG_MIN', 'LOG_MAX'),
                         help='p sweep range as log10 values (e.g. --p-range -5 -3 for 1e-5..1e-3). '
                              'Default: -4 -1')
+    parser.add_argument('--n-points', type=int, default=None,
+                        help='Number of p sweep points (overrides mode default). '
+                             'e.g. --p-range -3 -2 --n-points 20 for dense sweep')
     parser.add_argument('--data-dir', default=None,
                         help='Directory for saving/loading result files')
     parser.add_argument('--output', default=None,
@@ -543,11 +553,14 @@ if __name__ == "__main__":
         if args.mode == 'quick':
             code_distances = [5, 7, 9, 11]
             runtime_budget = (300, 45)
-            p_sweep = np.logspace(p_log_min, p_log_max, 12)
+            n_default = 12
         else:  # full
             code_distances = [5, 7, 9, 11, 13]
             runtime_budget = (1000, 180)
-            p_sweep = np.logspace(p_log_min, p_log_max, 20)
+            n_default = 20
+
+        n_points = args.n_points if args.n_points else n_default
+        p_sweep = np.logspace(p_log_min, p_log_max, n_points)
 
         print(f"  p sweep: {p_sweep[0]:.2e} .. {p_sweep[-1]:.2e} ({len(p_sweep)} points)")
 

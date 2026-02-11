@@ -48,7 +48,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker
 
 
 # ============== CSV 파싱 ==============
@@ -258,15 +258,21 @@ def create_simulate_func_no_erasure(Pm):
 def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget):
     """고정된 p 값들에 대해 시뮬레이션 수행"""
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-    
+
+    total_sims = len(p_list) * len(code_distances)
+    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
+
     for p in p_list:
         print(f"\n--- p = {p:.4e} ---")
         for d in code_distances:
+            tracker.begin_task()
             pL, pL_dev = simulate_func(p, d, runtime_budget, p_graph=p)
             results[d]["p"].append(p)
             results[d]["pL"].append(pL)
             results[d]["pL_dev"].append(pL_dev)
-    
+            tracker.end_task()
+
+    tracker.summary()
     return results
 
 

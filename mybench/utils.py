@@ -4,8 +4,93 @@ Utility functions for threshold analysis
 이 모듈은 여러 threshold 분석 스크립트에서 공유하는 유틸리티 함수들을 포함합니다.
 """
 
+import time
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+# ============== Progress Tracking ==============
+
+def format_duration(seconds):
+    """Format seconds into human-readable duration string."""
+    if seconds < 0:
+        return "0s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        m, s = divmod(int(seconds), 60)
+        return f"{m}m {s}s"
+    else:
+        h, remainder = divmod(int(seconds), 3600)
+        m, s = divmod(remainder, 60)
+        return f"{h}h {m}m {s}s"
+
+
+class ProgressTracker:
+    """Track simulation progress and estimate remaining time.
+
+    Usage:
+        tracker = ProgressTracker(total_tasks, "simulations", print_every=4)
+        for ...:
+            tracker.begin_task()
+            # ... do work ...
+            tracker.end_task()
+        tracker.summary()
+    """
+
+    def __init__(self, total_tasks, description="simulations", print_every=None):
+        self.total_tasks = total_tasks
+        self.completed = 0
+        self.start_time = time.time()
+        self.task_times = []
+        self.description = description
+        self._task_start = None
+        if print_every is None:
+            self.print_every = max(1, total_tasks // 20)
+        else:
+            self.print_every = max(1, print_every)
+
+    def begin_task(self):
+        """Call before starting a task."""
+        self._task_start = time.time()
+
+    def end_task(self):
+        """Call after completing a task. Prints progress periodically."""
+        if self._task_start is not None:
+            self.task_times.append(time.time() - self._task_start)
+            self._task_start = None
+        self.completed += 1
+        if (self.completed % self.print_every == 0 or
+                self.completed == self.total_tasks or
+                self.completed == 1):
+            self._print_progress()
+
+    def _print_progress(self):
+        elapsed = time.time() - self.start_time
+        remaining_tasks = self.total_tasks - self.completed
+        pct = self.completed / self.total_tasks * 100
+
+        if self.task_times:
+            avg = sum(self.task_times) / len(self.task_times)
+            eta = avg * remaining_tasks
+            print(f"  \u23f1  [{self.completed}/{self.total_tasks}] ({pct:.0f}%) "
+                  f"elapsed: {format_duration(elapsed)}, "
+                  f"ETA: ~{format_duration(eta)}, "
+                  f"avg: {avg:.1f}s/sim")
+        else:
+            print(f"  \u23f1  [{self.completed}/{self.total_tasks}] ({pct:.0f}%) "
+                  f"elapsed: {format_duration(elapsed)}")
+
+    def summary(self):
+        """Print final summary when all tasks are done."""
+        total_time = time.time() - self.start_time
+        if self.task_times:
+            avg = sum(self.task_times) / len(self.task_times)
+            print(f"  \u23f1  Done: {self.completed} {self.description} "
+                  f"in {format_duration(total_time)} (avg {avg:.1f}s/sim)")
+        else:
+            print(f"  \u23f1  Done: {self.completed} {self.description} "
+                  f"in {format_duration(total_time)}")
 
 
 def find_crossing_point(results, d1, d2, verbose=False):
