@@ -351,7 +351,7 @@ if __name__ == "__main__":
         print(f"=== Full mode: Measurement Erasure Comparison (Pm={Pm}) ===")
         
         code_distances = [5, 7, 9, 11, 13]
-        runtime_budget = (1000, 180)
+        runtime_budget = (40000, 3600)
         
         p_sweep_all = np.logspace(-4, -1, 20)
         

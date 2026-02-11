@@ -618,8 +618,8 @@ if __name__ == "__main__":
             code_distances = args.code_distances or [5, 7, 9]
             runtime_budget = (200, 30)
         else:  # full
-            code_distances = args.code_distances or [5, 7, 9, 11]
-            runtime_budget = (1000, 120)
+            code_distances = args.code_distances or [5, 7, 9, 11, 13]
+            runtime_budget = (40000, 3600)
 
         if args.rounds:
             rounds_list = sorted(args.rounds)

@@ -381,22 +381,20 @@ def plot_comparison(results_soft, results_no_erasure,
         if d in results_no_erasure and len(results_no_erasure[d]["p"]) > 0:
             p_arr = np.array(results_no_erasure[d]["p"])
             pL_arr = np.array(results_no_erasure[d]["pL"])
-            pL_dev = np.array(results_no_erasure[d]["pL_dev"])
             valid = pL_arr > 0
-            ax.errorbar(p_arr[valid], pL_arr[valid], yerr=pL_dev[valid],
-                        fmt='o--', color=clr,
-                        markerfacecolor='white', markeredgecolor=clr,
-                        markersize=6, linewidth=1.5, capsize=2, alpha=0.8)
+            ax.plot(p_arr[valid], pL_arr[valid],
+                    'o--', color=clr,
+                    markerfacecolor='white', markeredgecolor=clr,
+                    markersize=6, linewidth=1.5, alpha=0.8)
 
         # Soft erasure (filled circles, solid)
         if d in results_soft and len(results_soft[d]["p"]) > 0:
             p_arr = np.array(results_soft[d]["p"])
             pL_arr = np.array(results_soft[d]["pL"])
-            pL_dev = np.array(results_soft[d]["pL_dev"])
             valid = pL_arr > 0
-            ax.errorbar(p_arr[valid], pL_arr[valid], yerr=pL_dev[valid],
-                        fmt='o-', color=clr, markersize=6, linewidth=1.5,
-                        label=f'd = {d}', capsize=2)
+            ax.plot(p_arr[valid], pL_arr[valid],
+                    'o-', color=clr, markersize=6, linewidth=1.5,
+                    label=f'd = {d}')
 
     ax.set_xscale('log')
     ax.set_yscale('log')
@@ -563,8 +561,8 @@ if __name__ == "__main__":
             runtime_budget = (300, 45)
             n_default = 12
         else:  # full
-            code_distances = [5, 7, 9, 11, 13]
-            runtime_budget = (1000, 180)
+            code_distances = [3, 5, 7, 9, 11, 13]
+            runtime_budget = (40000, 3600)
             n_default = 20
 
         n_points = args.n_points if args.n_points else n_default

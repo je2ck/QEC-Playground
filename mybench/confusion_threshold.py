@@ -421,7 +421,7 @@ if __name__ == "__main__":
             p_sweep = np.logspace(-4, -1, 12)
         else:
             code_distances = [5, 7, 9, 11, 13]
-            runtime_budget = (1000, 180)
+            runtime_budget = (40000, 3600)
             p_sweep = np.logspace(-4, -1, 20)
         
         p_list = p_sweep.tolist()

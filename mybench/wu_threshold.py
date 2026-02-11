@@ -551,9 +551,9 @@ if __name__ == "__main__":
         
         code_distances = [5, 7, 9, 11, 13, 15]
         rough_code_distances = [5, 9]
-        rough_runtime_budget = (1000, 120)   # 1000 errors or 2 min
-        runtime_budget = (5000, 600)         # 5000 errors or 10 min
-        sweep_runtime_budget = (2000, 300)   # sweep용
+        rough_runtime_budget = (3000, 300)    # 3000 errors or 5 min
+        runtime_budget = (40000, 3600)           # 40000 errors or 1 hour
+        sweep_runtime_budget = (40000, 3600)     # sweep용 (paper level)
         
         # 논문처럼 10^-4 ~ 10^-1 로그 등간격 (full: 20개 포인트)
         p_sweep_all = np.logspace(-4, -1, 20)

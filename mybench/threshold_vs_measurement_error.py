@@ -398,7 +398,7 @@ if __name__ == "__main__":
         # ----- 설정 (더 촘촘하고, 더 큰 code distance, 더 많은 통계) -----
         Pm_list = np.linspace(0, 0.03, 13).tolist()  # 0, 0.0025, 0.005, ..., 0.03
         code_distances = [5, 7, 9, 11, 13]
-        runtime_budget = (1000, 180)
+        runtime_budget = (40000, 3600)
         p_sweep = np.logspace(-4, -1, 20).tolist()
 
         print(f"    Pm values: {[f'{Pm:.4f}' for Pm in Pm_list]}")
