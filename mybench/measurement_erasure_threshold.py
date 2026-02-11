@@ -40,7 +40,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -121,12 +121,16 @@ def create_simulate_func(Pm, Rm, Rc=0.0):
     return simulate_func
 
 
-def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget):
+def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1):
     """고정된 p 값들에 대해 시뮬레이션 수행"""
     print(f"\n>>> Running p-sweep for Pm={Pm}, Rm={Rm}, Rc={Rc}")
     print(f"    p values: {[f'{p:.4f}' for p in p_list]}")
     
     simulate_func = create_simulate_func(Pm, Rm, Rc)
+
+    if n_workers > 1:
+        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
+
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
 
     total_sims = len(p_list) * len(code_distances)
@@ -292,6 +296,8 @@ if __name__ == "__main__":
     parser.add_argument('--Pm', type=float, default=0.02, help='Measurement error probability')
     parser.add_argument('--output', default='measurement_erasure_threshold.pdf', help='Output file path')
     parser.add_argument('--data-dir', default='results_measurement_erasure', help='Directory for data files')
+    parser.add_argument('--parallel', type=int, default=1,
+                        help='Number of parallel workers (default: 1 = sequential)')
     args = parser.parse_args()
     
     os.makedirs(args.data_dir, exist_ok=True)
@@ -318,7 +324,8 @@ if __name__ == "__main__":
         results_rm0 = run_p_sweep(Pm, Rm=0, Rc=Rc, 
                                    code_distances=code_distances, 
                                    p_list=p_sweep_all.tolist(), 
-                                   runtime_budget=runtime_budget)
+                                   runtime_budget=runtime_budget,
+                                   n_workers=args.parallel)
         save_results(results_rm0, {"Pm": Pm, "Rm": 0, "Rc": Rc}, 
                      os.path.join(args.data_dir, "results_rm0.json"))
         
@@ -329,7 +336,8 @@ if __name__ == "__main__":
         results_rm98 = run_p_sweep(Pm, Rm=0.98, Rc=Rc,
                                     code_distances=code_distances,
                                     p_list=p_sweep_all.tolist(),
-                                    runtime_budget=runtime_budget)
+                                    runtime_budget=runtime_budget,
+                                    n_workers=args.parallel)
         save_results(results_rm98, {"Pm": Pm, "Rm": 0.98, "Rc": Rc}, 
                      os.path.join(args.data_dir, "results_rm98.json"))
         
@@ -349,7 +357,8 @@ if __name__ == "__main__":
         results_rm0 = run_p_sweep(Pm, Rm=0, Rc=Rc,
                                    code_distances=code_distances,
                                    p_list=p_sweep_all.tolist(),
-                                   runtime_budget=runtime_budget)
+                                   runtime_budget=runtime_budget,
+                                   n_workers=args.parallel)
         save_results(results_rm0, {"Pm": Pm, "Rm": 0, "Rc": Rc},
                      os.path.join(args.data_dir, "results_rm0_full.json"))
         
@@ -357,7 +366,8 @@ if __name__ == "__main__":
         results_rm98 = run_p_sweep(Pm, Rm=0.98, Rc=Rc,
                                     code_distances=code_distances,
                                     p_list=p_sweep_all.tolist(),
-                                    runtime_budget=runtime_budget)
+                                    runtime_budget=runtime_budget,
+                                    n_workers=args.parallel)
         save_results(results_rm98, {"Pm": Pm, "Rm": 0.98, "Rc": Rc},
                      os.path.join(args.data_dir, "results_rm98_full.json"))
         

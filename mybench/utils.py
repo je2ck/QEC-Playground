@@ -5,6 +5,7 @@ Utility functions for threshold analysis
 """
 
 import time
+import threading
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -29,12 +30,20 @@ def format_duration(seconds):
 class ProgressTracker:
     """Track simulation progress and estimate remaining time.
 
-    Usage:
+    Thread-safe: works in both sequential and parallel modes.
+
+    Usage (sequential):
         tracker = ProgressTracker(total_tasks, "simulations", print_every=4)
         for ...:
             tracker.begin_task()
             # ... do work ...
             tracker.end_task()
+        tracker.summary()
+
+    Usage (parallel):
+        tracker = ProgressTracker(total_tasks, "simulations")
+        # in each worker thread, after task completes:
+        tracker.task_done()
         tracker.summary()
     """
 
@@ -45,40 +54,64 @@ class ProgressTracker:
         self.task_times = []
         self.description = description
         self._task_start = None
+        self._lock = threading.Lock()
         if print_every is None:
             self.print_every = max(1, total_tasks // 20)
         else:
             self.print_every = max(1, print_every)
 
     def begin_task(self):
-        """Call before starting a task."""
+        """Call before starting a task (sequential mode only)."""
         self._task_start = time.time()
 
     def end_task(self):
-        """Call after completing a task. Prints progress periodically."""
-        if self._task_start is not None:
-            self.task_times.append(time.time() - self._task_start)
-            self._task_start = None
-        self.completed += 1
-        if (self.completed % self.print_every == 0 or
-                self.completed == self.total_tasks or
-                self.completed == 1):
+        """Call after completing a task (sequential mode). Prints progress periodically."""
+        with self._lock:
+            if self._task_start is not None:
+                self.task_times.append(time.time() - self._task_start)
+                self._task_start = None
+            self.completed += 1
+            should_print = (self.completed % self.print_every == 0 or
+                    self.completed == self.total_tasks or
+                    self.completed == 1)
+        if should_print:
+            self._print_progress()
+
+    def task_done(self):
+        """Thread-safe: increment completion counter (parallel mode)."""
+        with self._lock:
+            self.completed += 1
+            should_print = (self.completed % self.print_every == 0 or
+                    self.completed == self.total_tasks or
+                    self.completed == 1)
+        if should_print:
             self._print_progress()
 
     def _print_progress(self):
-        elapsed = time.time() - self.start_time
-        remaining_tasks = self.total_tasks - self.completed
-        pct = self.completed / self.total_tasks * 100
+        with self._lock:
+            elapsed = time.time() - self.start_time
+            completed = self.completed
+            remaining_tasks = self.total_tasks - completed
+            pct = completed / self.total_tasks * 100
+            has_task_times = len(self.task_times) > 0
+            avg_task = sum(self.task_times) / len(self.task_times) if has_task_times else 0
 
-        if self.task_times:
-            avg = sum(self.task_times) / len(self.task_times)
-            eta = avg * remaining_tasks
-            print(f"  \u23f1  [{self.completed}/{self.total_tasks}] ({pct:.0f}%) "
+        if has_task_times:
+            eta = avg_task * remaining_tasks
+            print(f"  \u23f1  [{completed}/{self.total_tasks}] ({pct:.0f}%) "
                   f"elapsed: {format_duration(elapsed)}, "
                   f"ETA: ~{format_duration(eta)}, "
-                  f"avg: {avg:.1f}s/sim")
+                  f"avg: {avg_task:.1f}s/sim")
+        elif completed > 0 and elapsed > 0:
+            # parallel mode: estimate from throughput
+            throughput = completed / elapsed
+            eta = remaining_tasks / throughput if throughput > 0 else 0
+            print(f"  \u23f1  [{completed}/{self.total_tasks}] ({pct:.0f}%) "
+                  f"elapsed: {format_duration(elapsed)}, "
+                  f"ETA: ~{format_duration(eta)}, "
+                  f"throughput: {throughput:.1f} sims/s")
         else:
-            print(f"  \u23f1  [{self.completed}/{self.total_tasks}] ({pct:.0f}%) "
+            print(f"  \u23f1  [{completed}/{self.total_tasks}] ({pct:.0f}%) "
                   f"elapsed: {format_duration(elapsed)}")
 
     def summary(self):
@@ -89,8 +122,63 @@ class ProgressTracker:
             print(f"  \u23f1  Done: {self.completed} {self.description} "
                   f"in {format_duration(total_time)} (avg {avg:.1f}s/sim)")
         else:
+            throughput = self.completed / total_time if total_time > 0 else 0
             print(f"  \u23f1  Done: {self.completed} {self.description} "
-                  f"in {format_duration(total_time)}")
+                  f"in {format_duration(total_time)} ({throughput:.1f} sims/s)")
+
+
+def run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers):
+    """Run p-sweep simulations in parallel using ThreadPoolExecutor.
+
+    Each (p, d) pair is submitted as an independent task.
+    Results are collected and organized in the same order as sequential execution.
+
+    Args:
+        simulate_func: function(p, d, runtime_budget, p_graph) -> (pL, pL_dev)
+        code_distances: list of code distances
+        p_list: list of physical error rates
+        runtime_budget: (min_error_cases, time_budget)
+        n_workers: number of parallel threads
+
+    Returns:
+        {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
+    task_list = [(p, d) for p in p_list for d in code_distances]
+    total = len(task_list)
+
+    print(f"  \u26a1 Parallel mode: {n_workers} workers, {total} tasks")
+    tracker = ProgressTracker(total, "simulations", print_every=max(1, n_workers))
+    result_map = {}
+
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        future_to_key = {}
+        for p, d in task_list:
+            future = executor.submit(simulate_func, p, d, runtime_budget, p)
+            future_to_key[future] = (p, d)
+
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                pL, pL_dev = future.result()
+            except Exception as e:
+                print(f"  [ERROR] p={key[0]:.4e}, d={key[1]}: {e}")
+                pL, pL_dev = 0.5, 1.0
+            result_map[key] = (pL, pL_dev)
+            tracker.task_done()
+
+    # Organize results in original p-order
+    for p in p_list:
+        for d in code_distances:
+            pL, pL_dev = result_map[(p, d)]
+            results[d]["p"].append(p)
+            results[d]["pL"].append(pL)
+            results[d]["pL_dev"].append(pL_dev)
+
+    tracker.summary()
+    return results
 
 
 def find_crossing_point(results, d1, d2, verbose=False):

@@ -59,7 +59,7 @@ from threshold_analyzer import (
 from utils import (
     find_crossing_point, estimate_threshold_from_data,
     compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
-    ProgressTracker,
+    ProgressTracker, run_parallel_simulations,
 )
 
 
@@ -312,8 +312,11 @@ def create_simulate_func_no_erasure(Pm, max_half_weight=1):
 
 # ============== Sweep & I/O ==============
 
-def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget):
+def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget, n_workers=1):
     """Run simulation over a sweep of physical error probabilities."""
+    if n_workers > 1:
+        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
+
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
 
     total_sims = len(p_list) * len(code_distances)
@@ -483,6 +486,8 @@ if __name__ == "__main__":
                         help='Directory for saving/loading result files')
     parser.add_argument('--output', default=None,
                         help='Output plot file path')
+    parser.add_argument('--parallel', type=int, default=1,
+                        help='Number of parallel workers (default: 1 = sequential)')
     args = parser.parse_args()
 
     # Parse confusion matrix CSV
@@ -574,7 +579,7 @@ if __name__ == "__main__":
         print(f"       Norm weights: {weights_str}")
         print(f"{'='*60}")
         sim_soft = create_simulate_func_soft(Pm, classes, max_half_weight=mhw)
-        results_soft = run_p_sweep(sim_soft, code_distances, p_list, runtime_budget)
+        results_soft = run_p_sweep(sim_soft, code_distances, p_list, runtime_budget, n_workers=args.parallel)
         save_results(results_soft,
                      {"exposure": exp, "Pm": Pm,
                       "classes": [{"name": c["name"], "Rm": c["Rm"], "Rc": c["Rc"], "weight": c["weight"]}
@@ -587,7 +592,7 @@ if __name__ == "__main__":
         print(f" [2/2] No erasure (Pm={Pm:.6f}, pure measurement error)")
         print(f"{'='*60}")
         sim_no = create_simulate_func_no_erasure(Pm, max_half_weight=mhw)
-        results_no = run_p_sweep(sim_no, code_distances, p_list, runtime_budget)
+        results_no = run_p_sweep(sim_no, code_distances, p_list, runtime_budget, n_workers=args.parallel)
         save_results(results_no,
                      {"exposure": exp, "Pm": Pm,
                       "type": "no_erasure", "max_half_weight": mhw},

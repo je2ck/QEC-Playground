@@ -37,7 +37,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, ProgressTracker
+from utils import find_crossing_point, estimate_threshold_from_data, ProgressTracker, run_parallel_simulations
 
 
 # ============== 시뮬레이션 함수 ==============
@@ -98,11 +98,15 @@ def create_simulate_func(Pm, Rm=0.0, Rc=0.0):
     return simulate_func
 
 
-def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget):
+def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1):
     """고정된 Pm에서 p 값들에 대해 시뮬레이션 수행"""
     print(f"\n>>> Running p-sweep for Pm={Pm}, Rm={Rm}, Rc={Rc}")
 
     simulate_func = create_simulate_func(Pm, Rm, Rc)
+
+    if n_workers > 1:
+        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
+
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
 
     total_sims = len(p_list) * len(code_distances)
@@ -123,7 +127,7 @@ def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget):
 
 
 def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
-                          threshold_method="adjacent", verbose=True):
+                          threshold_method="adjacent", verbose=True, n_workers=1):
     """
     하나의 Pm 값에 대해 threshold 추정
     
@@ -136,7 +140,7 @@ def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
     print(f"  Finding threshold for Pm = {Pm:.4f}")
     print(f"{'='*60}")
 
-    results = run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget)
+    results = run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=n_workers)
 
     # Threshold 추정
     print(f"\n>>> Estimating threshold for Pm={Pm:.4f}...")
@@ -308,6 +312,8 @@ if __name__ == "__main__":
                         help='Threshold estimation method')
     parser.add_argument('--plot-individual', action='store_true',
                         help='Also plot individual pL vs p for each Pm')
+    parser.add_argument('--parallel', type=int, default=1,
+                        help='Number of parallel workers (default: 1 = sequential)')
     args = parser.parse_args()
 
     os.makedirs(args.data_dir, exist_ok=True)
@@ -342,7 +348,8 @@ if __name__ == "__main__":
             pm_tracker.begin_task()
             th, th_err, results = find_threshold_for_Pm(
                 Pm, Rm, Rc, code_distances, p_sweep, runtime_budget,
-                threshold_method=args.threshold_method
+                threshold_method=args.threshold_method,
+                n_workers=args.parallel
             )
             thresholds.append(th)
             threshold_errs.append(th_err)
@@ -405,7 +412,8 @@ if __name__ == "__main__":
             pm_tracker.begin_task()
             th, th_err, results = find_threshold_for_Pm(
                 Pm, Rm, Rc, code_distances, p_sweep, runtime_budget,
-                threshold_method=args.threshold_method
+                threshold_method=args.threshold_method,
+                n_workers=args.parallel
             )
             thresholds.append(th)
             threshold_errs.append(th_err)

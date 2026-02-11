@@ -48,7 +48,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations
 
 
 # ============== CSV 파싱 ==============
@@ -255,8 +255,11 @@ def create_simulate_func_no_erasure(Pm):
     return simulate_func
 
 
-def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget):
+def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget, n_workers=1):
     """고정된 p 값들에 대해 시뮬레이션 수행"""
+    if n_workers > 1:
+        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
+
     results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
 
     total_sims = len(p_list) * len(code_distances)
@@ -377,6 +380,8 @@ if __name__ == "__main__":
     parser.add_argument('--list-exposures', action='store_true', help='List available exposures')
     parser.add_argument('--data-dir', default=None, help='Directory for data files')
     parser.add_argument('--output', default=None, help='Output plot file path')
+    parser.add_argument('--parallel', type=int, default=1,
+                        help='Number of parallel workers (default: 1 = sequential)')
     args = parser.parse_args()
     
     # CSV 파싱
@@ -424,7 +429,7 @@ if __name__ == "__main__":
         print(f" With measurement erasure (Pm={Pm:.4f}, Rm={Rm:.4f}, Rc={Rc:.6f})")
         print(f"{'='*60}")
         sim_with = create_simulate_func(Pm, Rm, Rc)
-        results_with = run_p_sweep(sim_with, code_distances, p_list, runtime_budget)
+        results_with = run_p_sweep(sim_with, code_distances, p_list, runtime_budget, n_workers=args.parallel)
         save_results(results_with,
                      {"exposure": args.exposure, "Pm": Pm, "Rm": Rm, "Rc": Rc, "type": "with_erasure"},
                      os.path.join(data_dir, "results_with_erasure.json"))
@@ -434,7 +439,7 @@ if __name__ == "__main__":
         print(f" Without erasure (Pm={Pm:.4f}, pure measurement error)")
         print(f"{'='*60}")
         sim_without = create_simulate_func_no_erasure(Pm)
-        results_without = run_p_sweep(sim_without, code_distances, p_list, runtime_budget)
+        results_without = run_p_sweep(sim_without, code_distances, p_list, runtime_budget, n_workers=args.parallel)
         save_results(results_without,
                      {"exposure": args.exposure, "Pm": Pm, "type": "no_erasure"},
                      os.path.join(data_dir, "results_no_erasure.json"))

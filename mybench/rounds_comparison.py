@@ -56,7 +56,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import ProgressTracker
+from utils import ProgressTracker, run_parallel_simulations
 
 
 # ============== CSV Parsing (reuse from confusion_amb_threshold.py) ==============
@@ -245,6 +245,55 @@ def run_rounds_sweep(label, p_gate, d, rounds_list, noise_config, decoder_config
             tracker.end_task()
 
     return result
+
+
+def run_rounds_sweep_parallel(label, p_gate, code_distances, rounds_list,
+                              noise_config, decoder_config, runtime_budget,
+                              n_workers, tracker=None):
+    """
+    Parallel sweep: all (d, T) pairs for one scenario submitted concurrently.
+
+    Returns:
+        {d: {"T": [...], "pL": [...], "pL_dev": [...]}}
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    tasks = [(d, T) for d in code_distances for T in rounds_list]
+    print(f"  \u26a1 [{label}] Parallel: {n_workers} workers, {len(tasks)} tasks")
+
+    result_map = {}
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        future_to_key = {}
+        for d, T in tasks:
+            future = executor.submit(
+                run_single_simulation, p_gate, d, T,
+                noise_config, decoder_config, runtime_budget
+            )
+            future_to_key[future] = (d, T)
+
+        for future in as_completed(future_to_key):
+            d, T = future_to_key[future]
+            try:
+                pL, pL_dev = future.result()
+            except Exception as e:
+                print(f"  [ERROR] [{label}] d={d}, T={T}: {e}")
+                pL, pL_dev = 0.5, 1.0
+            result_map[(d, T)] = (pL, pL_dev)
+            print(f"  [{label}] d={d:2d}, T={T:2d}: pL={pL:.4e} \u00b1 {pL_dev:.2e}")
+            if tracker:
+                tracker.task_done()
+
+    # Organize by code distance, preserving T order
+    results = {}
+    for d in code_distances:
+        results[d] = {"T": [], "pL": [], "pL_dev": []}
+        for T in rounds_list:
+            pL, pL_dev = result_map[(d, T)]
+            results[d]["T"].append(T)
+            results[d]["pL"].append(pL)
+            results[d]["pL_dev"].append(pL_dev)
+
+    return results
 
 
 # ============== I/O ==============
@@ -495,6 +544,8 @@ if __name__ == "__main__":
                         help='Directory for saving/loading result files')
     parser.add_argument('--output', default=None,
                         help='Output plot file path')
+    parser.add_argument('--parallel', type=int, default=1,
+                        help='Number of parallel workers (default: 1 = sequential)')
     args = parser.parse_args()
 
     # Parse confusion CSV
@@ -589,26 +640,38 @@ if __name__ == "__main__":
         print(f" [1/3] Raw (Pm={Pm_raw:.6f})")
         print(f"{'='*60}")
         noise_raw = make_noise_config_raw(Pm_raw)
-        all_results['raw'] = {}
-        for d in code_distances:
-            print(f"\n  --- d = {d} ---")
-            all_results['raw'][d] = run_rounds_sweep(
-                'raw', p_gate, d, rounds_list, noise_raw, decoder_config, runtime_budget,
-                tracker=tracker
+        if args.parallel > 1:
+            all_results['raw'] = run_rounds_sweep_parallel(
+                'raw', p_gate, code_distances, rounds_list, noise_raw,
+                decoder_config, runtime_budget, args.parallel, tracker=tracker
             )
+        else:
+            all_results['raw'] = {}
+            for d in code_distances:
+                print(f"\n  --- d = {d} ---")
+                all_results['raw'][d] = run_rounds_sweep(
+                    'raw', p_gate, d, rounds_list, noise_raw, decoder_config, runtime_budget,
+                    tracker=tracker
+                )
 
         # --- 2/3: Den ---
         print(f"\n{'='*60}")
         print(f" [2/3] Den (Pm={Pm_den:.6f})")
         print(f"{'='*60}")
         noise_den = make_noise_config_den(Pm_den)
-        all_results['den'] = {}
-        for d in code_distances:
-            print(f"\n  --- d = {d} ---")
-            all_results['den'][d] = run_rounds_sweep(
-                'den', p_gate, d, rounds_list, noise_den, decoder_config, runtime_budget,
-                tracker=tracker
+        if args.parallel > 1:
+            all_results['den'] = run_rounds_sweep_parallel(
+                'den', p_gate, code_distances, rounds_list, noise_den,
+                decoder_config, runtime_budget, args.parallel, tracker=tracker
             )
+        else:
+            all_results['den'] = {}
+            for d in code_distances:
+                print(f"\n  --- d = {d} ---")
+                all_results['den'][d] = run_rounds_sweep(
+                    'den', p_gate, d, rounds_list, noise_den, decoder_config, runtime_budget,
+                    tracker=tracker
+                )
 
         # --- 3/3: Den + Erasure ---
         if classes:
@@ -616,13 +679,19 @@ if __name__ == "__main__":
             print(f" [3/3] Den + Erasure (Pm={Pm_den:.6f}, {len(classes)} classes)")
             print(f"{'='*60}")
             noise_era = make_noise_config_den_erasure(Pm_den, classes)
-            all_results['den_erasure'] = {}
-            for d in code_distances:
-                print(f"\n  --- d = {d} ---")
-                all_results['den_erasure'][d] = run_rounds_sweep(
-                    'den+era', p_gate, d, rounds_list, noise_era, decoder_config, runtime_budget,
-                    tracker=tracker
+            if args.parallel > 1:
+                all_results['den_erasure'] = run_rounds_sweep_parallel(
+                    'den+era', p_gate, code_distances, rounds_list, noise_era,
+                    decoder_config, runtime_budget, args.parallel, tracker=tracker
                 )
+            else:
+                all_results['den_erasure'] = {}
+                for d in code_distances:
+                    print(f"\n  --- d = {d} ---")
+                    all_results['den_erasure'][d] = run_rounds_sweep(
+                        'den+era', p_gate, d, rounds_list, noise_era, decoder_config, runtime_budget,
+                        tracker=tracker
+                    )
         else:
             print("\n  [SKIP] Den+Erasure: no ambiguous zone data")
 
