@@ -369,19 +369,22 @@ def plot_comparison(results_soft, results_no_erasure,
         if d in results_no_erasure and len(results_no_erasure[d]["p"]) > 0:
             p_arr = np.array(results_no_erasure[d]["p"])
             pL_arr = np.array(results_no_erasure[d]["pL"])
+            pL_dev = np.array(results_no_erasure[d]["pL_dev"])
             valid = pL_arr > 0
-            ax.plot(p_arr[valid], pL_arr[valid], 'o--',
-                    color=clr, markerfacecolor='white', markeredgecolor=clr,
-                    markersize=6, linewidth=1.5)
+            ax.errorbar(p_arr[valid], pL_arr[valid], yerr=pL_dev[valid],
+                        fmt='o--', color=clr,
+                        markerfacecolor='white', markeredgecolor=clr,
+                        markersize=6, linewidth=1.5, capsize=2, alpha=0.8)
 
         # Soft erasure (filled circles, solid)
         if d in results_soft and len(results_soft[d]["p"]) > 0:
             p_arr = np.array(results_soft[d]["p"])
             pL_arr = np.array(results_soft[d]["pL"])
+            pL_dev = np.array(results_soft[d]["pL_dev"])
             valid = pL_arr > 0
-            ax.plot(p_arr[valid], pL_arr[valid], 'o-',
-                    color=clr, markersize=6, linewidth=1.5,
-                    label=f'd = {d}')
+            ax.errorbar(p_arr[valid], pL_arr[valid], yerr=pL_dev[valid],
+                        fmt='o-', color=clr, markersize=6, linewidth=1.5,
+                        label=f'd = {d}', capsize=2)
 
     ax.set_xscale('log')
     ax.set_yscale('log')
@@ -525,17 +528,16 @@ if __name__ == "__main__":
         print(f"  {json.dumps(soft_config, indent=4)}")
         sys.exit(0)
 
-    # Setup directories
-    data_dir = args.data_dir or f"results_amb_exp{exp}"
+    # Setup directories — encode mode, p-range, mhw into default dir name
+    p_log_min, p_log_max = (args.p_range if args.p_range else [-4, -1])
+    p_range_tag = f"p{p_log_min:.0f}to{p_log_max:.0f}"   # e.g. "p-4to-1"
+    mhw = args.max_half_weight
+    run_tag = f"{args.mode}_{p_range_tag}_mhw{mhw}"      # e.g. "quick_p-4to-1_mhw3"
+    data_dir = args.data_dir or f"results_amb_exp{exp}/{run_tag}"
     os.makedirs(data_dir, exist_ok=True)
-    output = args.output or os.path.join(data_dir, f"amb_threshold_exp{exp}.pdf")
+    output = args.output or os.path.join(data_dir, f"amb_threshold_exp{exp}_{run_tag}.pdf")
 
     compile_code_if_necessary()
-
-    mhw = args.max_half_weight
-
-    # p sweep range
-    p_log_min, p_log_max = (args.p_range if args.p_range else [-4, -1])
 
     if args.mode in ('quick', 'full'):
         if args.mode == 'quick':
