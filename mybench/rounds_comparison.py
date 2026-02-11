@@ -56,7 +56,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import ProgressTracker, run_parallel_simulations
+from utils import ProgressTracker, run_parallel_simulations, scaled_runtime_budget
 
 
 # ============== CSV Parsing (reuse from confusion_amb_threshold.py) ==============
@@ -261,13 +261,15 @@ def run_rounds_sweep_parallel(label, p_gate, code_distances, rounds_list,
     tasks = [(d, T) for d in code_distances for T in rounds_list]
     print(f"  \u26a1 [{label}] Parallel: {n_workers} workers, {len(tasks)} tasks")
 
+    d_base = min(code_distances)
     result_map = {}
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         future_to_key = {}
         for d, T in tasks:
+            budget = scaled_runtime_budget(runtime_budget, d, d_base)
             future = executor.submit(
                 run_single_simulation, p_gate, d, T,
-                noise_config, decoder_config, runtime_budget
+                noise_config, decoder_config, budget
             )
             future_to_key[future] = (d, T)
 
@@ -630,6 +632,7 @@ if __name__ == "__main__":
 
         # ============== Run simulations ==============
         all_results = {}
+        d_base = min(code_distances)
 
         n_scenarios = 3 if classes else 2
         total_sims = n_scenarios * len(code_distances) * len(rounds_list)
@@ -650,7 +653,8 @@ if __name__ == "__main__":
             for d in code_distances:
                 print(f"\n  --- d = {d} ---")
                 all_results['raw'][d] = run_rounds_sweep(
-                    'raw', p_gate, d, rounds_list, noise_raw, decoder_config, runtime_budget,
+                    'raw', p_gate, d, rounds_list, noise_raw, decoder_config,
+                    scaled_runtime_budget(runtime_budget, d, d_base),
                     tracker=tracker
                 )
 
@@ -669,7 +673,8 @@ if __name__ == "__main__":
             for d in code_distances:
                 print(f"\n  --- d = {d} ---")
                 all_results['den'][d] = run_rounds_sweep(
-                    'den', p_gate, d, rounds_list, noise_den, decoder_config, runtime_budget,
+                    'den', p_gate, d, rounds_list, noise_den, decoder_config,
+                    scaled_runtime_budget(runtime_budget, d, d_base),
                     tracker=tracker
                 )
 
@@ -689,7 +694,8 @@ if __name__ == "__main__":
                 for d in code_distances:
                     print(f"\n  --- d = {d} ---")
                     all_results['den_erasure'][d] = run_rounds_sweep(
-                        'den+era', p_gate, d, rounds_list, noise_era, decoder_config, runtime_budget,
+                        'den+era', p_gate, d, rounds_list, noise_era, decoder_config,
+                        scaled_runtime_budget(runtime_budget, d, d_base),
                         tracker=tracker
                     )
         else:

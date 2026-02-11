@@ -40,7 +40,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -136,11 +136,12 @@ def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1)
     total_sims = len(p_list) * len(code_distances)
     tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
 
+    d_base = min(code_distances)
     for p in p_list:
         print(f"\n--- p = {p:.4e} ---")
         for d in code_distances:
             tracker.begin_task()
-            pL, pL_dev = simulate_func(p, d, runtime_budget, p_graph=p)
+            pL, pL_dev = simulate_func(p, d, scaled_runtime_budget(runtime_budget, d, d_base), p_graph=p)
             results[d]["p"].append(p)
             results[d]["pL"].append(pL)
             results[d]["pL_dev"].append(pL_dev)

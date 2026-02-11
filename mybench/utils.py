@@ -127,6 +127,29 @@ class ProgressTracker:
                   f"in {format_duration(total_time)} ({throughput:.1f} sims/s)")
 
 
+def scaled_runtime_budget(runtime_budget, d, d_base):
+    """Scale runtime_budget according to code distance.
+
+    Larger code distances need proportionally more time because:
+    - Each simulation trial is slower (more qubits & rounds)
+    - Logical error rates are lower → need more trials to collect errors
+
+    Scaling: time_budget *= (d / d_base)^2
+             min_error_cases stays the same (we want the same statistical quality)
+
+    Args:
+        runtime_budget: (min_error_cases, time_budget)
+        d: current code distance
+        d_base: smallest code distance (reference)
+
+    Returns:
+        (min_error_cases, scaled_time_budget)
+    """
+    min_error_cases, time_budget = runtime_budget
+    scale = (d / d_base) ** 2
+    return (min_error_cases, int(time_budget * scale))
+
+
 def run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers):
     """Run p-sweep simulations in parallel using ThreadPoolExecutor.
 
@@ -150,13 +173,15 @@ def run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budg
     total = len(task_list)
 
     print(f"  \u26a1 Parallel mode: {n_workers} workers, {total} tasks")
+    d_base = min(code_distances)
     tracker = ProgressTracker(total, "simulations", print_every=max(1, n_workers))
     result_map = {}
 
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         future_to_key = {}
         for p, d in task_list:
-            future = executor.submit(simulate_func, p, d, runtime_budget, p)
+            budget = scaled_runtime_budget(runtime_budget, d, d_base)
+            future = executor.submit(simulate_func, p, d, budget, p)
             future_to_key[future] = (p, d)
 
         for future in as_completed(future_to_key):
