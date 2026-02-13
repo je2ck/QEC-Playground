@@ -36,7 +36,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -203,7 +203,7 @@ def extract_plot_data(collected_data_list, code_distances):
     return results
 
 
-def run_p_sweep(pm, Re, code_distances, p_list, runtime_budget, n_workers=1):
+def run_p_sweep(pm, Re, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None):
     """
     고정된 p 값들에 대해 시뮬레이션 수행 (넓은 범위 데이터 수집용)
     
@@ -214,6 +214,7 @@ def run_p_sweep(pm, Re, code_distances, p_list, runtime_budget, n_workers=1):
         p_list: 시뮬레이션할 p 값 목록
         runtime_budget: (min_error_cases, time_budget)
         n_workers: 병렬 워커 수 (1 = 순차 실행)
+        checkpoint_path: checkpoint 파일 경로 (중간 저장/이어하기)
     
     Returns:
         {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
@@ -224,27 +225,9 @@ def run_p_sweep(pm, Re, code_distances, p_list, runtime_budget, n_workers=1):
     
     simulate_func = create_simulate_func(pm, Re)
 
-    if n_workers > 1:
-        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
-
-    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-
-    total_sims = len(p_list) * len(code_distances)
-    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
-
-    d_base = min(code_distances)
-    for p in p_list:
-        print(f"\n--- p = {p:.4e} ---")
-        for d in code_distances:
-            tracker.begin_task()
-            pL, pL_dev = simulate_func(p, d, scaled_runtime_budget(runtime_budget, d, d_base), p_graph=p)
-            results[d]["p"].append(p)
-            results[d]["pL"].append(pL)
-            results[d]["pL_dev"].append(pL_dev)
-            tracker.end_task()
-
-    tracker.summary()
-    return results
+    return run_p_sweep_with_checkpoint(
+        simulate_func, code_distances, p_list, runtime_budget,
+        checkpoint_path=checkpoint_path, n_workers=n_workers)
 
 
 # merge_results, find_crossing_point, estimate_threshold_from_data are imported from utils.py
@@ -434,7 +417,9 @@ if __name__ == "__main__":
         # p_list_pm0 = p_sweep_all[p_sweep_all <= 0.02]
         p_list_pm0 = p_sweep_all
         print(f"\n>>> pm=0, Re={args.Re}: p sweep from {p_list_pm0[0]:.1e} to {p_list_pm0[-1]:.1e} ({len(p_list_pm0)} points)")
-        results_pm0_sweep = run_p_sweep(0, args.Re, code_distances, p_list_pm0.tolist(), sweep_runtime_budget, n_workers=args.parallel)
+        results_pm0_sweep = run_p_sweep(0, args.Re, code_distances, p_list_pm0.tolist(), sweep_runtime_budget,
+                                        n_workers=args.parallel,
+                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pm0_sweep.json"))
         
         # ThresholdAnalyzer로 정밀 threshold 추정
         th_pm0, th_pm0_err, data_pm0 = run_threshold_analysis(
@@ -456,7 +441,9 @@ if __name__ == "__main__":
         # p_list_pm002 = p_sweep_all[p_sweep_all <= 0.02]
         p_list_pm002 = p_sweep_all
         print(f"\n>>> pm=0.02, Re={args.Re}: p sweep from {p_list_pm002[0]:.1e} to {p_list_pm002[-1]:.1e} ({len(p_list_pm002)} points)")
-        results_pm002_sweep = run_p_sweep(0.02, args.Re, code_distances, p_list_pm002.tolist(), sweep_runtime_budget, n_workers=args.parallel)
+        results_pm002_sweep = run_p_sweep(0.02, args.Re, code_distances, p_list_pm002.tolist(), sweep_runtime_budget,
+                                          n_workers=args.parallel,
+                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pm002_sweep.json"))
         
         # ThresholdAnalyzer로 정밀 threshold 추정
         th_pm002, th_pm002_err, data_pm002 = run_threshold_analysis(
@@ -496,7 +483,9 @@ if __name__ == "__main__":
         # ========== pm = 0 ==========
         p_list_pm0 = p_sweep_all[p_sweep_all <= 0.03]
         print(f"\n>>> pm=0, Re={args.Re}: p sweep from {p_list_pm0[0]:.1e} to {p_list_pm0[-1]:.1e} ({len(p_list_pm0)} points)")
-        results_pm0_sweep = run_p_sweep(0, args.Re, code_distances, p_list_pm0.tolist(), sweep_runtime_budget, n_workers=args.parallel)
+        results_pm0_sweep = run_p_sweep(0, args.Re, code_distances, p_list_pm0.tolist(), sweep_runtime_budget,
+                                        n_workers=args.parallel,
+                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pm0_full_sweep.json"))
         
         th_pm0, th_pm0_err, data_pm0 = run_threshold_analysis(
             pm=0,
@@ -515,7 +504,9 @@ if __name__ == "__main__":
         # ========== pm = 0.02 ==========
         p_list_pm002 = p_sweep_all[p_sweep_all <= 0.03]
         print(f"\n>>> pm=0.02, Re={args.Re}: p sweep from {p_list_pm002[0]:.1e} to {p_list_pm002[-1]:.1e} ({len(p_list_pm002)} points)")
-        results_pm002_sweep = run_p_sweep(0.02, args.Re, code_distances, p_list_pm002.tolist(), sweep_runtime_budget, n_workers=args.parallel)
+        results_pm002_sweep = run_p_sweep(0.02, args.Re, code_distances, p_list_pm002.tolist(), sweep_runtime_budget,
+                                          n_workers=args.parallel,
+                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pm002_full_sweep.json"))
         
         th_pm002, th_pm002_err, data_pm002 = run_threshold_analysis(
             pm=0.02,

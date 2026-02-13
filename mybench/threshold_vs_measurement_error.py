@@ -37,7 +37,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
+from utils import find_crossing_point, estimate_threshold_from_data, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint
 
 
 # ============== 시뮬레이션 함수 ==============
@@ -98,37 +98,20 @@ def create_simulate_func(Pm, Rm=0.0, Rc=0.0):
     return simulate_func
 
 
-def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1):
-    """고정된 Pm에서 p 값들에 대해 시뮬레이션 수행"""
+def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None):
+    """고정된 Pm에서 p 값들에 대해 시뮬레이션 수행 (checkpoint 지원)"""
     print(f"\n>>> Running p-sweep for Pm={Pm}, Rm={Rm}, Rc={Rc}")
 
     simulate_func = create_simulate_func(Pm, Rm, Rc)
 
-    if n_workers > 1:
-        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
-
-    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-
-    total_sims = len(p_list) * len(code_distances)
-    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
-
-    d_base = min(code_distances)
-    for p in p_list:
-        print(f"\n--- p = {p:.4e} ---")
-        for d in code_distances:
-            tracker.begin_task()
-            pL, pL_dev = simulate_func(p, d, scaled_runtime_budget(runtime_budget, d, d_base), p_graph=p)
-            results[d]["p"].append(p)
-            results[d]["pL"].append(pL)
-            results[d]["pL_dev"].append(pL_dev)
-            tracker.end_task()
-
-    tracker.summary()
-    return results
+    return run_p_sweep_with_checkpoint(
+        simulate_func, code_distances, p_list, runtime_budget,
+        checkpoint_path=checkpoint_path, n_workers=n_workers)
 
 
 def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
-                          threshold_method="adjacent", verbose=True, n_workers=1):
+                          threshold_method="adjacent", verbose=True, n_workers=1,
+                          checkpoint_path=None):
     """
     하나의 Pm 값에 대해 threshold 추정
     
@@ -141,7 +124,8 @@ def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
     print(f"  Finding threshold for Pm = {Pm:.4f}")
     print(f"{'='*60}")
 
-    results = run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=n_workers)
+    results = run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
+                          n_workers=n_workers, checkpoint_path=checkpoint_path)
 
     # Threshold 추정
     print(f"\n>>> Estimating threshold for Pm={Pm:.4f}...")
@@ -351,7 +335,8 @@ if __name__ == "__main__":
             th, th_err, results = find_threshold_for_Pm(
                 Pm, Rm, Rc, code_distances, p_sweep, runtime_budget,
                 threshold_method=args.threshold_method,
-                n_workers=args.parallel
+                n_workers=args.parallel,
+                checkpoint_path=os.path.join(args.data_dir, f"checkpoint_Pm{Pm:.4f}.json")
             )
             thresholds.append(th)
             threshold_errs.append(th_err)
@@ -415,7 +400,8 @@ if __name__ == "__main__":
             th, th_err, results = find_threshold_for_Pm(
                 Pm, Rm, Rc, code_distances, p_sweep, runtime_budget,
                 threshold_method=args.threshold_method,
-                n_workers=args.parallel
+                n_workers=args.parallel,
+                checkpoint_path=os.path.join(args.data_dir, f"checkpoint_Pm{Pm:.4f}_full.json")
             )
             thresholds.append(th)
             threshold_errs.append(th_err)

@@ -4,6 +4,7 @@ Utility functions for threshold analysis
 이 모듈은 여러 threshold 분석 스크립트에서 공유하는 유틸리티 함수들을 포함합니다.
 """
 
+import os
 import time
 import threading
 import numpy as np
@@ -201,6 +202,199 @@ def run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budg
             results[d]["p"].append(p)
             results[d]["pL"].append(pL)
             results[d]["pL_dev"].append(pL_dev)
+
+    tracker.summary()
+    return results
+
+
+def save_checkpoint(results, checkpoint_path):
+    """중간 결과를 checkpoint 파일로 저장.
+
+    각 p값 시뮬레이션 완료 후 호출하여 진행 상황을 보존합니다.
+
+    Args:
+        results: {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
+        checkpoint_path: checkpoint JSON 파일 경로
+    """
+    import json as _json
+    data = {}
+    for d, vals in results.items():
+        data[str(d)] = {
+            "p": [float(x) for x in vals["p"]],
+            "pL": [float(x) for x in vals["pL"]],
+            "pL_dev": [float(x) for x in vals["pL_dev"]]
+        }
+    tmp_path = checkpoint_path + ".tmp"
+    with open(tmp_path, 'w') as f:
+        _json.dump(data, f, indent=2)
+    os.replace(tmp_path, checkpoint_path)
+
+
+def load_checkpoint(checkpoint_path, code_distances):
+    """Checkpoint 파일에서 이전 결과 로드.
+
+    Args:
+        checkpoint_path: checkpoint JSON 파일 경로
+        code_distances: 예상되는 code distance 목록
+
+    Returns:
+        results: {d: {"p": [...], "pL": [...], "pL_dev": [...]}} 또는 빈 dict
+        completed_p: set of p values that have ALL code distances completed
+    """
+    import json as _json
+    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
+    completed_p = set()
+
+    if not os.path.exists(checkpoint_path):
+        return results, completed_p
+
+    try:
+        with open(checkpoint_path, 'r') as f:
+            data = _json.load(f)
+
+        for d_str, vals in data.items():
+            d = int(d_str)
+            if d in results:
+                results[d] = {
+                    "p": list(vals["p"]),
+                    "pL": list(vals["pL"]),
+                    "pL_dev": list(vals["pL_dev"]),
+                }
+
+        # 모든 code distance에서 완료된 p값 찾기
+        p_sets = []
+        for d in code_distances:
+            p_sets.append(set(round(p, 10) for p in results[d]["p"]))
+        if p_sets:
+            completed_p = p_sets[0]
+            for ps in p_sets[1:]:
+                completed_p = completed_p & ps
+
+        n_total = sum(len(results[d]["p"]) for d in code_distances)
+        print(f"  📂 Loaded checkpoint: {checkpoint_path} ({n_total} data points, {len(completed_p)} p-values complete)")
+    except Exception as e:
+        print(f"  ⚠️  Failed to load checkpoint {checkpoint_path}: {e}")
+        results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
+        completed_p = set()
+
+    return results, completed_p
+
+
+def run_p_sweep_with_checkpoint(simulate_func, code_distances, p_list, runtime_budget,
+                                checkpoint_path=None, n_workers=1):
+    """run_p_sweep with checkpoint/resume support.
+
+    각 p값에 대한 모든 code distance 시뮬레이션 완료 후 자동 저장합니다.
+    이전에 저장된 checkpoint가 있으면 완료된 p값을 건너뜁니다.
+
+    Args:
+        simulate_func: function(p, d, runtime_budget, p_graph) -> (pL, pL_dev)
+        code_distances: list of code distances
+        p_list: list of physical error rates
+        runtime_budget: (min_error_cases, time_budget)
+        checkpoint_path: checkpoint 파일 경로 (None이면 checkpoint 비활성화)
+        n_workers: 병렬 워커 수 (1 = 순차)
+
+    Returns:
+        {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
+    """
+    # Load existing checkpoint
+    if checkpoint_path:
+        results, completed_p = load_checkpoint(checkpoint_path, code_distances)
+        remaining_p = [p for p in p_list if round(p, 10) not in completed_p]
+        if len(remaining_p) < len(p_list):
+            skipped = len(p_list) - len(remaining_p)
+            print(f"  ⏩ Resuming: skipping {skipped}/{len(p_list)} already-completed p values")
+        if not remaining_p:
+            print(f"  ✅ All p values already completed in checkpoint")
+            return results
+    else:
+        results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
+        remaining_p = list(p_list)
+
+    if n_workers > 1 and len(remaining_p) > 0:
+        # Parallel mode with periodic checkpoint
+        new_results = _run_parallel_with_checkpoint(
+            simulate_func, code_distances, remaining_p, runtime_budget,
+            n_workers, checkpoint_path, results)
+        return new_results
+
+    # Sequential mode
+    total_sims = len(remaining_p) * len(code_distances)
+    if total_sims == 0:
+        return results
+
+    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
+    d_base = min(code_distances)
+
+    for p in remaining_p:
+        print(f"\n--- p = {p:.4e} ---")
+        for d in code_distances:
+            tracker.begin_task()
+            pL, pL_dev = simulate_func(p, d, scaled_runtime_budget(runtime_budget, d, d_base), p_graph=p)
+            results[d]["p"].append(p)
+            results[d]["pL"].append(pL)
+            results[d]["pL_dev"].append(pL_dev)
+            tracker.end_task()
+        # Checkpoint after each p value completes all code distances
+        if checkpoint_path:
+            save_checkpoint(results, checkpoint_path)
+
+    tracker.summary()
+    return results
+
+
+def _run_parallel_with_checkpoint(simulate_func, code_distances, p_list, runtime_budget,
+                                  n_workers, checkpoint_path, results):
+    """Parallel p-sweep with checkpoint support.
+
+    p값 단위로 그룹화하여, 한 p의 모든 d가 끝나면 checkpoint를 저장합니다.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
+    d_base = min(code_distances)
+    total = len(p_list) * len(code_distances)
+    print(f"  ⚡ Parallel mode: {n_workers} workers, {total} tasks")
+    tracker = ProgressTracker(total, "simulations", print_every=max(1, n_workers))
+
+    lock = threading.Lock()
+    # Track completed (p, d) pairs for this batch
+    p_results = {}  # {round(p, 10): {d: (pL, pL_dev)}}
+
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        future_to_key = {}
+        for p in p_list:
+            for d in code_distances:
+                budget = scaled_runtime_budget(runtime_budget, d, d_base)
+                future = executor.submit(simulate_func, p, d, budget, p)
+                future_to_key[future] = (p, d)
+
+        for future in as_completed(future_to_key):
+            p, d = future_to_key[future]
+            try:
+                pL, pL_dev = future.result()
+            except Exception as e:
+                print(f"  [ERROR] p={p:.4e}, d={d}: {e}")
+                pL, pL_dev = 0.5, 1.0
+
+            p_key = round(p, 10)
+            with lock:
+                if p_key not in p_results:
+                    p_results[p_key] = {}
+                p_results[p_key][d] = (pL, pL_dev)
+
+                # Check if all code distances for this p are done
+                if len(p_results[p_key]) == len(code_distances):
+                    for dd in code_distances:
+                        pL_dd, pL_dev_dd = p_results[p_key][dd]
+                        results[dd]["p"].append(p)
+                        results[dd]["pL"].append(pL_dd)
+                        results[dd]["pL_dev"].append(pL_dev_dd)
+                    if checkpoint_path:
+                        save_checkpoint(results, checkpoint_path)
+
+            tracker.task_done()
 
     tracker.summary()
     return results

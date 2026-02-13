@@ -354,18 +354,20 @@ def plot_rounds_comparison(all_results, code_distances, p_gate, exposure,
             if scenario not in all_results or d not in all_results[scenario]:
                 continue
             data = all_results[scenario][d]
-            T_arr = np.array(data["T"])
+            T_arr = np.array(data["T"], dtype=float)
             pL_arr = np.array(data["pL"])
-            pL_dev = np.array(data["pL_dev"])
 
-            valid = pL_arr > 0
+            valid = (pL_arr > 0) & (pL_arr < 1) & (T_arr > 0)
             if not np.any(valid):
                 continue
 
-            ax.errorbar(T_arr[valid], pL_arr[valid], yerr=pL_dev[valid],
-                        fmt=style['marker'], linestyle=style['ls'],
-                        color=style['color'], markersize=6, linewidth=1.5,
-                        label=style['label'], capsize=3)
+            # Per-round LER (probability): 1 - (1 - pL_shot)^(1/T)
+            pL_per_round = 1 - (1 - pL_arr[valid]) ** (1.0 / T_arr[valid])
+
+            ax.plot(T_arr[valid], pL_per_round,
+                    marker=style['marker'], linestyle=style['ls'],
+                    color=style['color'], markersize=6, linewidth=1.5,
+                    label=style['label'])
 
         # d rounds reference line
         ax.axvline(x=d, color='gray', linestyle=':', alpha=0.5, linewidth=1)
@@ -374,7 +376,7 @@ def plot_rounds_comparison(all_results, code_distances, p_gate, exposure,
 
         ax.set_yscale('log')
         ax.set_xlabel('Measurement rounds $T$', fontsize=12)
-        ax.set_ylabel('Logical error rate $p_L$', fontsize=12)
+        ax.set_ylabel('Per-round logical error rate', fontsize=12)
         ax.set_title(f'd = {d}', fontsize=13)
         ax.legend(fontsize=8, loc='upper right')
         ax.grid(True, alpha=0.3)
@@ -387,7 +389,7 @@ def plot_rounds_comparison(all_results, code_distances, p_gate, exposure,
         if T_all:
             ax.set_xticks(sorted(set(T_all)))
 
-    fig.suptitle(f'LER vs Measurement Rounds\n'
+    fig.suptitle(f'Per-round LER vs Measurement Rounds\n'
                  f'Exposure={exposure}ms, p_gate={p_gate:.2e}',
                  fontsize=13, y=1.03)
 
@@ -424,7 +426,7 @@ def plot_round_savings(all_results, code_distances, p_gate, exposure,
             T_arr = np.array(data["T"], dtype=float)
             pL_arr = np.array(data["pL"])
 
-            valid = pL_arr > 0
+            valid = (pL_arr > 0) & (pL_arr < 1) & (T_arr > 0)
             if np.sum(valid) < 2:
                 continue
 
@@ -433,20 +435,22 @@ def plot_round_savings(all_results, code_distances, p_gate, exposure,
             T_sorted = T_arr[valid][order]
             pL_sorted = pL_arr[valid][order]
 
-            # Plot LER(T) as step-like: at each T, what LER do you achieve?
-            ax.plot(T_sorted, pL_sorted,
+            # Per-round LER (probability): 1 - (1 - pL_shot)^(1/T)
+            pL_per_round = 1 - (1 - pL_sorted) ** (1.0 / T_sorted)
+
+            ax.plot(T_sorted, pL_per_round,
                     marker=style['marker'], linestyle='-',
                     color=style['color'], markersize=6, linewidth=1.5,
                     label=style['label'])
 
         ax.set_yscale('log')
         ax.set_xlabel('Measurement rounds $T$', fontsize=12)
-        ax.set_ylabel('Logical error rate $p_L$', fontsize=12)
+        ax.set_ylabel('Per-round logical error rate', fontsize=12)
         ax.set_title(f'd = {d}', fontsize=13)
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f'Round Savings: LER vs Measurement Rounds\n'
+    fig.suptitle(f'Per-round LER vs Measurement Rounds\n'
                  f'Exposure={exposure}ms, p_gate={p_gate:.2e}',
                  fontsize=13, y=1.03)
     plt.tight_layout()
@@ -534,14 +538,14 @@ if __name__ == "__main__":
     parser.add_argument('--mode', choices=['params', 'quick', 'full', 'plot'],
                         default='params',
                         help='Mode: params, quick, full, plot')
-    parser.add_argument('--p-gate', type=float, default=0.001,
-                        help='Fixed gate error rate (default: 0.001)')
+    parser.add_argument('--p-gate', type=float, default=0.0005,
+                        help='Fixed gate error rate (default: 0.0005)')
     parser.add_argument('--code-distances', type=int, nargs='+', default=None,
                         help='Code distances to simulate (default: quick=[5,7,9], full=[5,7,9,11])')
     parser.add_argument('--rounds', type=int, nargs='+', default=None,
                         help='Specific rounds to test (e.g. --rounds 1 3 5 7 9 11 13 15)')
-    parser.add_argument('--max-half-weight', type=int, default=3,
-                        help='UF decoder max_half_weight (default: 3)')
+    parser.add_argument('--max-half-weight', type=int, default=23,
+                        help='UF decoder max_half_weight (default: 23)')
     parser.add_argument('--data-dir', default=None,
                         help='Directory for saving/loading result files')
     parser.add_argument('--output', default=None,

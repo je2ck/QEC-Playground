@@ -40,7 +40,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -121,34 +121,16 @@ def create_simulate_func(Pm, Rm, Rc=0.0):
     return simulate_func
 
 
-def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1):
+def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None):
     """고정된 p 값들에 대해 시뮬레이션 수행"""
     print(f"\n>>> Running p-sweep for Pm={Pm}, Rm={Rm}, Rc={Rc}")
     print(f"    p values: {[f'{p:.4f}' for p in p_list]}")
     
     simulate_func = create_simulate_func(Pm, Rm, Rc)
 
-    if n_workers > 1:
-        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
-
-    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-
-    total_sims = len(p_list) * len(code_distances)
-    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
-
-    d_base = min(code_distances)
-    for p in p_list:
-        print(f"\n--- p = {p:.4e} ---")
-        for d in code_distances:
-            tracker.begin_task()
-            pL, pL_dev = simulate_func(p, d, scaled_runtime_budget(runtime_budget, d, d_base), p_graph=p)
-            results[d]["p"].append(p)
-            results[d]["pL"].append(pL)
-            results[d]["pL_dev"].append(pL_dev)
-            tracker.end_task()
-
-    tracker.summary()
-    return results
+    return run_p_sweep_with_checkpoint(
+        simulate_func, code_distances, p_list, runtime_budget,
+        checkpoint_path=checkpoint_path, n_workers=n_workers)
 
 
 # merge_results, find_crossing_point, estimate_threshold_from_data are imported from utils.py
@@ -327,7 +309,8 @@ if __name__ == "__main__":
                                    code_distances=code_distances, 
                                    p_list=p_sweep_all.tolist(), 
                                    runtime_budget=runtime_budget,
-                                   n_workers=args.parallel)
+                                   n_workers=args.parallel,
+                                   checkpoint_path=os.path.join(args.data_dir, "checkpoint_rm0_sweep.json"))
         save_results(results_rm0, {"Pm": Pm, "Rm": 0, "Rc": Rc}, 
                      os.path.join(args.data_dir, "results_rm0.json"))
         
@@ -339,7 +322,8 @@ if __name__ == "__main__":
                                     code_distances=code_distances,
                                     p_list=p_sweep_all.tolist(),
                                     runtime_budget=runtime_budget,
-                                    n_workers=args.parallel)
+                                    n_workers=args.parallel,
+                                    checkpoint_path=os.path.join(args.data_dir, "checkpoint_rm98_sweep.json"))
         save_results(results_rm98, {"Pm": Pm, "Rm": 0.98, "Rc": Rc}, 
                      os.path.join(args.data_dir, "results_rm98.json"))
         
@@ -360,7 +344,8 @@ if __name__ == "__main__":
                                    code_distances=code_distances,
                                    p_list=p_sweep_all.tolist(),
                                    runtime_budget=runtime_budget,
-                                   n_workers=args.parallel)
+                                   n_workers=args.parallel,
+                                   checkpoint_path=os.path.join(args.data_dir, "checkpoint_rm0_full_sweep.json"))
         save_results(results_rm0, {"Pm": Pm, "Rm": 0, "Rc": Rc},
                      os.path.join(args.data_dir, "results_rm0_full.json"))
         
@@ -369,7 +354,8 @@ if __name__ == "__main__":
                                     code_distances=code_distances,
                                     p_list=p_sweep_all.tolist(),
                                     runtime_budget=runtime_budget,
-                                    n_workers=args.parallel)
+                                    n_workers=args.parallel,
+                                    checkpoint_path=os.path.join(args.data_dir, "checkpoint_rm98_full_sweep.json"))
         save_results(results_rm98, {"Pm": Pm, "Rm": 0.98, "Rc": Rc},
                      os.path.join(args.data_dir, "results_rm98_full.json"))
         

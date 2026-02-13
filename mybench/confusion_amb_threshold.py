@@ -56,7 +56,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import (
+from utils import (run_p_sweep_with_checkpoint,
     find_crossing_point, estimate_threshold_from_data,
     compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
     ProgressTracker, run_parallel_simulations, scaled_runtime_budget,
@@ -313,29 +313,11 @@ def create_simulate_func_no_erasure(Pm, max_half_weight=1):
 
 # ============== Sweep & I/O ==============
 
-def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget, n_workers=1):
-    """Run simulation over a sweep of physical error probabilities."""
-    if n_workers > 1:
-        return run_parallel_simulations(simulate_func, code_distances, p_list, runtime_budget, n_workers)
-
-    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-
-    total_sims = len(p_list) * len(code_distances)
-    tracker = ProgressTracker(total_sims, "simulations", print_every=len(code_distances))
-
-    d_base = min(code_distances)
-    for p in p_list:
-        print(f"\n--- p = {p:.4e} ---")
-        for d in code_distances:
-            tracker.begin_task()
-            pL, pL_dev = simulate_func(p, d, scaled_runtime_budget(runtime_budget, d, d_base), p_graph=p)
-            results[d]["p"].append(p)
-            results[d]["pL"].append(pL)
-            results[d]["pL_dev"].append(pL_dev)
-            tracker.end_task()
-
-    tracker.summary()
-    return results
+def run_p_sweep(simulate_func, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None):
+    """Run simulation over a sweep of physical error probabilities (with checkpoint support)."""
+    return run_p_sweep_with_checkpoint(
+        simulate_func, code_distances, p_list, runtime_budget,
+        checkpoint_path=checkpoint_path, n_workers=n_workers)
 
 
 def save_results(results, params, filename):
@@ -580,7 +562,9 @@ if __name__ == "__main__":
         print(f"       Norm weights: {weights_str}")
         print(f"{'='*60}")
         sim_soft = create_simulate_func_soft(Pm, classes, max_half_weight=mhw)
-        results_soft = run_p_sweep(sim_soft, code_distances, p_list, runtime_budget, n_workers=args.parallel)
+        results_soft = run_p_sweep(sim_soft, code_distances, p_list, runtime_budget,
+                                   n_workers=args.parallel,
+                                   checkpoint_path=os.path.join(data_dir, "checkpoint_soft.json"))
         save_results(results_soft,
                      {"exposure": exp, "Pm": Pm,
                       "classes": [{"name": c["name"], "Rm": c["Rm"], "Rc": c["Rc"], "weight": c["weight"]}
@@ -593,7 +577,9 @@ if __name__ == "__main__":
         print(f" [2/2] No erasure (Pm={Pm:.6f}, pure measurement error)")
         print(f"{'='*60}")
         sim_no = create_simulate_func_no_erasure(Pm, max_half_weight=mhw)
-        results_no = run_p_sweep(sim_no, code_distances, p_list, runtime_budget, n_workers=args.parallel)
+        results_no = run_p_sweep(sim_no, code_distances, p_list, runtime_budget,
+                                  n_workers=args.parallel,
+                                  checkpoint_path=os.path.join(data_dir, "checkpoint_no_erasure.json"))
         save_results(results_no,
                      {"exposure": exp, "Pm": Pm,
                       "type": "no_erasure", "max_half_weight": mhw},
