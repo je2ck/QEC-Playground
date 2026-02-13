@@ -33,7 +33,7 @@ from threshold_analyzer import (
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint, clean_checkpoints
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -460,10 +460,14 @@ if __name__ == "__main__":
     parser.add_argument('--data-dir', default='.', help='Directory for data files')
     parser.add_argument('--parallel', type=int, default=1,
                         help='Number of parallel workers (0 = all cores, 1 = sequential)')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Delete existing checkpoints and start from scratch')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
     
     os.makedirs(args.data_dir, exist_ok=True)
+    if args.fresh:
+        clean_checkpoints(args.data_dir)
     compile_code_if_necessary()
     
     if args.mode == 'quick':

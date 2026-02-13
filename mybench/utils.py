@@ -230,6 +230,21 @@ def save_checkpoint(results, checkpoint_path):
     os.replace(tmp_path, checkpoint_path)
 
 
+def clean_checkpoints(data_dir):
+    """data_dir 내의 모든 checkpoint_*.json 파일을 삭제합니다.
+
+    --fresh 옵션과 함께 사용하여 처음부터 다시 시뮬레이션을 시작할 때 사용합니다.
+    """
+    import glob
+    pattern = os.path.join(data_dir, "checkpoint_*.json")
+    files = glob.glob(pattern)
+    if files:
+        for f in files:
+            os.remove(f)
+            print(f"  🗑  Removed checkpoint: {os.path.basename(f)}")
+        print(f"  Cleaned {len(files)} checkpoint file(s) from {data_dir}")
+
+
 def load_checkpoint(checkpoint_path, code_distances):
     """Checkpoint 파일에서 이전 결과 로드.
 

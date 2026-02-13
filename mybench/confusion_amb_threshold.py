@@ -56,7 +56,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import (run_p_sweep_with_checkpoint,
+from utils import (run_p_sweep_with_checkpoint, clean_checkpoints,
     find_crossing_point, estimate_threshold_from_data,
     compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
     ProgressTracker, run_parallel_simulations, scaled_runtime_budget,
@@ -470,6 +470,8 @@ if __name__ == "__main__":
                         help='Output plot file path')
     parser.add_argument('--parallel', type=int, default=1,
                         help='Number of parallel workers (0 = all cores, 1 = sequential)')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Delete existing checkpoints and start from scratch')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
 
@@ -533,6 +535,8 @@ if __name__ == "__main__":
     run_tag = f"{args.mode}_{p_range_tag}_mhw{mhw}"      # e.g. "quick_p-4to-1_mhw3"
     data_dir = args.data_dir or f"results_amb_exp{exp}/{run_tag}"
     os.makedirs(data_dir, exist_ok=True)
+    if args.fresh:
+        clean_checkpoints(data_dir)
     output = args.output or os.path.join(data_dir, f"amb_threshold_exp{exp}_{run_tag}.pdf")
 
     compile_code_if_necessary()

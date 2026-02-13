@@ -48,7 +48,7 @@ from threshold_analyzer import (
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint
+from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint, clean_checkpoints
 
 
 # ============== CSV 파싱 ==============
@@ -365,6 +365,8 @@ if __name__ == "__main__":
     parser.add_argument('--output', default=None, help='Output plot file path')
     parser.add_argument('--parallel', type=int, default=1,
                         help='Number of parallel workers (0 = all cores, 1 = sequential)')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Delete existing checkpoints and start from scratch')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
     
@@ -392,6 +394,8 @@ if __name__ == "__main__":
     # 데이터 디렉토리 설정
     data_dir = args.data_dir or f"results_confusion_exp{args.exposure}"
     os.makedirs(data_dir, exist_ok=True)
+    if args.fresh:
+        clean_checkpoints(data_dir)
     output = args.output or os.path.join(data_dir, f"confusion_threshold_exp{args.exposure}.pdf")
     
     compile_code_if_necessary()
