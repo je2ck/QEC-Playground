@@ -618,25 +618,15 @@ if __name__ == "__main__":
         # Threshold 계산 - crossing method 우선, 실패시 fitting
         th_re0_err, th_re98_err = None, None
         
-        print("\n>>> Re=0: Calculating threshold from crossing points...")
-        th_re0_cross, th_re0_cross_err = estimate_threshold_from_data(results_re0, code_distances, verbose=True)
-        if th_re0_cross is not None:
-            th_re0 = th_re0_cross
-            th_re0_err = th_re0_cross_err
-            print(f"    Threshold (crossing): {th_re0*100:.3f}%")
-        else:
-            print("    Crossing method failed, using fitting...")
-            th_re0, th_re0_err = fit_threshold_from_results(results_re0, code_distances)
+        print("\n>>> Re=0: Calculating threshold...")
+        th_re0, th_re0_err = estimate_threshold_from_data(results_re0, code_distances, verbose=True)
+        if th_re0 is not None:
+            print(f"    Threshold: {th_re0*100:.3f}%")
         
-        print("\n>>> Re=0.98: Calculating threshold from crossing points...")
-        th_re98_cross, th_re98_cross_err = estimate_threshold_from_data(results_re98, code_distances, verbose=True)
-        if th_re98_cross is not None:
-            th_re98 = th_re98_cross
-            th_re98_err = th_re98_cross_err
-            print(f"    Threshold (crossing): {th_re98*100:.3f}%")
-        else:
-            print("    Crossing method failed, using fitting...")
-            th_re98, th_re98_err = fit_threshold_from_results(results_re98, code_distances)
+        print("\n>>> Re=0.98: Calculating threshold...")
+        th_re98, th_re98_err = estimate_threshold_from_data(results_re98, code_distances, verbose=True)
+        if th_re98 is not None:
+            print(f"    Threshold: {th_re98*100:.3f}%")
         
         plot_wu_fig3a(results_re0, results_re98, code_distances,
                       threshold_re0=th_re0, threshold_re98=th_re98,

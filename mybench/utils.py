@@ -495,119 +495,116 @@ def find_crossing_point(results, d1, d2, verbose=False):
     return None
 
 
-def estimate_threshold_from_data(results, code_distances, verbose=True, method="adjacent"):
+def _quadratic_approx_curve(p_d_pair, A, B, C, pc0, v0):
+    """Finite-size scaling ansatz: pL = A + B*x + C*x^2, x = (p - pc0) * d^(1/v0)"""
+    y_list = []
+    for p, d in p_d_pair:
+        x = (p - pc0) * (d ** (1. / v0))
+        y = A + B * x + C * (x ** 2)
+        y_list.append(y)
+    return y_list
+
+
+def estimate_threshold_from_data(results, code_distances, verbose=True, **kwargs):
     """
-    데이터로부터 threshold 추정
+    데이터로부터 threshold 추정 (finite-size scaling curve fitting)
+    
+    ThresholdAnalyzer와 동일한 quadratic ansatz를 사용:
+        pL(p, d) = A + B * x + C * x^2,  x = (p - p_c) * d^(1/v)
+    scipy.curve_fit으로 5개 파라미터 (A, B, C, p_c, v)를 피팅하여
+    threshold p_c와 오차를 직접 산출합니다.
+    
+    피팅 실패 시 교차점 기반 fallback을 사용합니다.
     
     Args:
         results: {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
         code_distances: 사용할 code distance 목록
         verbose: 상세 출력 여부
-        method: 추정 방법
-            - "adjacent": 인접한 쌍들의 평균 (기본, 가장 안정적)
-            - "largest_pair": 가장 큰 두 code distance의 교차점 (유한 크기 효과 최소)
-            - "smallest_pair": 가장 작은 두 code distance의 교차점 (데이터 범위가 좁을 때)
-            - "all_pairs": 모든 쌍의 교차점 중 median
+        **kwargs: 하위 호환용 (method 등 무시)
     
     Returns:
         threshold: 추정된 threshold 값
-        threshold_err: 표준편차 또는 추정 오차
+        threshold_err: 피팅 오차 (covariance로부터)
     """
+    from scipy.optimize import curve_fit
+
     sorted_d = sorted(code_distances)
-    
-    if method == "largest_pair":
-        # 가장 큰 두 code distance 사용 (유한 크기 효과 최소화)
-        if len(sorted_d) < 2:
-            return None, None
-        d1, d2 = sorted_d[-2], sorted_d[-1]
-        crossing = find_crossing_point(results, d1, d2, verbose=verbose)
-        if crossing is not None and crossing > 0:
-            if verbose:
-                print(f"  Crossing d={d1} & d={d2}: p = {crossing:.6f}")
-            # 오차 추정: 그 다음 큰 쌍과의 차이
-            if len(sorted_d) >= 3:
-                d0 = sorted_d[-3]
-                crossing2 = find_crossing_point(results, d0, d2, verbose=False)
-                if crossing2 is not None:
-                    threshold_err = abs(crossing - crossing2)
-                else:
-                    threshold_err = crossing * 0.1
-            else:
-                threshold_err = crossing * 0.1
-            if verbose:
-                print(f"  => Estimated threshold: {crossing:.6f} ± {threshold_err:.6f}")
-            return crossing, threshold_err
-        
-        # largest_pair에서 못 찾으면 smallest_pair 시도
+
+    # 데이터 준비
+    x_data = []
+    y_data = []
+    sigma = []
+
+    for d in sorted_d:
+        if d not in results:
+            continue
+        for i, p in enumerate(results[d]["p"]):
+            pL = results[d]["pL"][i]
+            pL_dev = results[d]["pL_dev"][i] if i < len(results[d]["pL_dev"]) else 0.1
+            if pL > 0 and pL < 1:  # 유효한 데이터만
+                x_data.append((p, d))
+                y_data.append(pL)
+                sigma.append(max(pL_dev, 0.001))  # 최소 오차
+
+    if len(x_data) < 5:
         if verbose:
-            print(f"  [No crossing found with largest pair, trying smallest pair]")
-        d1, d2 = sorted_d[0], sorted_d[1]
-        crossing = find_crossing_point(results, d1, d2, verbose=verbose)
-        if crossing is not None and crossing > 0:
-            if verbose:
-                print(f"  Crossing d={d1} & d={d2}: p = {crossing:.6f}")
-            threshold_err = crossing * 0.15  # 작은 d는 유한 크기 효과가 커서 오차 더 큼
-            if verbose:
-                print(f"  => Estimated threshold: {crossing:.6f} ± {threshold_err:.6f}")
-            return crossing, threshold_err
-        
-        return None, None
-    
-    elif method == "smallest_pair":
-        # 가장 작은 두 code distance 사용 (데이터 범위가 좁을 때 유용)
-        if len(sorted_d) < 2:
-            return None, None
-        d1, d2 = sorted_d[0], sorted_d[1]
-        crossing = find_crossing_point(results, d1, d2, verbose=verbose)
-        if crossing is not None and crossing > 0:
-            if verbose:
-                print(f"  Crossing d={d1} & d={d2}: p = {crossing:.6f}")
-            threshold_err = crossing * 0.15
-            if verbose:
-                print(f"  => Estimated threshold: {crossing:.6f} ± {threshold_err:.6f}")
-            return crossing, threshold_err
-        return None, None
-    
-    elif method == "all_pairs":
-        # 모든 쌍의 교차점 계산 후 median
-        crossings = []
-        for i in range(len(sorted_d)):
-            for j in range(i + 1, len(sorted_d)):
-                d1, d2 = sorted_d[i], sorted_d[j]
-                crossing = find_crossing_point(results, d1, d2, verbose=verbose)
-                if crossing is not None and crossing > 0:
-                    if verbose:
-                        print(f"  Crossing d={d1} & d={d2}: p = {crossing:.6f}")
-                    crossings.append(crossing)
-        
-        if not crossings:
-            return None, None
-        
-        threshold = np.median(crossings)
-        threshold_err = np.std(crossings) if len(crossings) > 1 else threshold * 0.1
+            print(f"  [Fit] Not enough data points ({len(x_data)}), falling back to crossing method")
+        return _estimate_threshold_crossing_fallback(results, sorted_d, verbose)
+
+    try:
+        p_values = [x[0] for x in x_data]
+        guess_A = np.average(y_data)
+        guess_pc0 = np.median(p_values)
+
+        p_range = max(p_values) - min(p_values)
+        lower_bounds = [min(y_data) * 0.1, -np.inf, -100, min(p_values) - p_range, 0.5]
+        upper_bounds = [max(y_data) * 2, np.inf, 100, max(p_values) + p_range, 3]
+
+        popt, pcov = curve_fit(
+            _quadratic_approx_curve, x_data, y_data,
+            sigma=sigma, absolute_sigma=False,
+            p0=[guess_A, 1, 0.1, guess_pc0, 1],
+            bounds=(lower_bounds, upper_bounds),
+            maxfev=10000
+        )
+        perr = np.sqrt(np.diag(pcov))
+
+        threshold = popt[3]
+        threshold_err = perr[3]
+
         if verbose:
-            print(f"  => Estimated threshold (median of {len(crossings)} pairs): {threshold:.6f} ± {threshold_err:.6f}")
+            print(f"  [Fit] A={popt[0]:.4f}, B={popt[1]:.4f}, C={popt[2]:.4f}")
+            print(f"        pc0={threshold:.6f} ± {threshold_err:.6f}, v0={popt[4]:.4f}")
+            print(f"  => Estimated threshold: {threshold:.6f} ({threshold*100:.3f}%) ± {threshold_err:.6f}")
+
         return threshold, threshold_err
-    
-    else:  # "adjacent" - 기존 방식
-        crossings = []
-        for i in range(len(sorted_d) - 1):
-            d1, d2 = sorted_d[i], sorted_d[i + 1]
-            crossing = find_crossing_point(results, d1, d2, verbose=verbose)
-            if crossing is not None and crossing > 0:
-                if verbose:
-                    print(f"  Crossing d={d1} & d={d2}: p = {crossing:.6f}")
-                crossings.append(crossing)
-        
-        if not crossings:
-            return None, None
-        
-        threshold = np.mean(crossings)
-        threshold_err = np.std(crossings) if len(crossings) > 1 else threshold * 0.1
-        
+
+    except Exception as e:
         if verbose:
-            print(f"  => Estimated threshold: {threshold:.6f} ± {threshold_err:.6f}")
-        return threshold, threshold_err
+            print(f"  [Fit] Curve fitting failed: {e}, falling back to crossing method")
+        return _estimate_threshold_crossing_fallback(results, sorted_d, verbose)
+
+
+def _estimate_threshold_crossing_fallback(results, sorted_d, verbose):
+    """교차점 기반 fallback (피팅 실패 시 사용)"""
+    crossings = []
+    for i in range(len(sorted_d) - 1):
+        d1, d2 = sorted_d[i], sorted_d[i + 1]
+        crossing = find_crossing_point(results, d1, d2, verbose=verbose)
+        if crossing is not None and crossing > 0:
+            if verbose:
+                print(f"  [Fallback] Crossing d={d1} & d={d2}: p = {crossing:.6f}")
+            crossings.append(crossing)
+
+    if not crossings:
+        return None, None
+
+    threshold = np.mean(crossings)
+    threshold_err = np.std(crossings) if len(crossings) > 1 else threshold * 0.1
+
+    if verbose:
+        print(f"  [Fallback] Estimated threshold: {threshold:.6f} ± {threshold_err:.6f}")
+    return threshold, threshold_err
 
 
 def merge_results(results1, results2):

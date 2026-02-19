@@ -110,7 +110,7 @@ def run_p_sweep(Pm, Rm, Rc, code_distances, p_list, runtime_budget, n_workers=1,
 
 
 def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
-                          threshold_method="adjacent", verbose=True, n_workers=1,
+                          verbose=True, n_workers=1,
                           checkpoint_path=None):
     """
     하나의 Pm 값에 대해 threshold 추정
@@ -130,7 +130,7 @@ def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, p_list, runtime_budget,
     # Threshold 추정
     print(f"\n>>> Estimating threshold for Pm={Pm:.4f}...")
     threshold, threshold_err = estimate_threshold_from_data(
-        results, code_distances, verbose=verbose, method=threshold_method
+        results, code_distances, verbose=verbose
     )
 
     if threshold is not None:
@@ -287,9 +287,6 @@ if __name__ == "__main__":
                         help='Output figure path')
     parser.add_argument('--data-dir', default='results_threshold_vs_Pm',
                         help='Directory for data files')
-    parser.add_argument('--threshold-method', default='all_pairs',
-                        choices=['adjacent', 'largest_pair', 'smallest_pair', 'all_pairs'],
-                        help='Threshold estimation method')
     parser.add_argument('--plot-individual', action='store_true',
                         help='Also plot individual pL vs p for each Pm')
     parser.add_argument('--parallel', type=int, default=1,
@@ -333,7 +330,6 @@ if __name__ == "__main__":
             pm_tracker.begin_task()
             th, th_err, results = find_threshold_for_Pm(
                 Pm, Rm, Rc, code_distances, p_sweep, runtime_budget,
-                threshold_method=args.threshold_method,
                 n_workers=args.parallel,
                 checkpoint_path=os.path.join(args.data_dir, f"checkpoint_Pm{Pm:.4f}.json")
             )
@@ -349,7 +345,7 @@ if __name__ == "__main__":
             "thresholds": [float(t) if t is not None else None for t in thresholds],
             "threshold_errs": [float(e) if e is not None else None for e in threshold_errs],
             "params": {"Rm": Rm, "Rc": Rc, "code_distances": code_distances,
-                       "mode": "quick", "threshold_method": args.threshold_method},
+                       "mode": "quick"},
             "per_Pm_results": per_Pm_results,
         }
         save_all_results(all_data, os.path.join(args.data_dir, "results_quick.json"))
@@ -398,7 +394,6 @@ if __name__ == "__main__":
             pm_tracker.begin_task()
             th, th_err, results = find_threshold_for_Pm(
                 Pm, Rm, Rc, code_distances, p_sweep, runtime_budget,
-                threshold_method=args.threshold_method,
                 n_workers=args.parallel,
                 checkpoint_path=os.path.join(args.data_dir, f"checkpoint_Pm{Pm:.4f}_full.json")
             )
@@ -414,7 +409,7 @@ if __name__ == "__main__":
             "thresholds": [float(t) if t is not None else None for t in thresholds],
             "threshold_errs": [float(e) if e is not None else None for e in threshold_errs],
             "params": {"Rm": Rm, "Rc": Rc, "code_distances": code_distances,
-                       "mode": "full", "threshold_method": args.threshold_method},
+                       "mode": "full"},
             "per_Pm_results": per_Pm_results,
         }
         save_all_results(all_data, os.path.join(args.data_dir, "results_full.json"))
@@ -464,15 +459,14 @@ if __name__ == "__main__":
             code_distances = sorted(
                 next(iter(all_data["per_Pm_results"].values())).keys()
             )
-            print(f"  Recalculating thresholds with method='{args.threshold_method}'...")
+            print(f"  Recalculating thresholds with curve fitting...")
             thresholds = []
             threshold_errs = []
             for Pm_val in Pm_list:
                 results = all_data["per_Pm_results"].get(Pm_val, {})
                 if results:
                     th, th_err = estimate_threshold_from_data(
-                        results, code_distances, verbose=True,
-                        method=args.threshold_method
+                        results, code_distances, verbose=True
                     )
                     thresholds.append(th)
                     threshold_errs.append(th_err)
