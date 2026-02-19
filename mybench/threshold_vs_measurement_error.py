@@ -287,7 +287,7 @@ if __name__ == "__main__":
                         help='Output figure path')
     parser.add_argument('--data-dir', default='results_threshold_vs_Pm',
                         help='Directory for data files')
-    parser.add_argument('--threshold-method', default='largest_pair',
+    parser.add_argument('--threshold-method', default='all_pairs',
                         choices=['adjacent', 'largest_pair', 'smallest_pair', 'all_pairs'],
                         help='Threshold estimation method')
     parser.add_argument('--plot-individual', action='store_true',
@@ -317,7 +317,7 @@ if __name__ == "__main__":
         # ----- 설정 -----
         Pm_list = np.linspace(0, 0.03, 13).tolist()  # [0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]
         code_distances = [3, 5, 7, 9, 11]
-        runtime_budget = (1000, 120)
+        runtime_budget = (3000, 300)
         p_sweep = np.logspace(-2.5, -1, 20).tolist()  # 물리적 에러율 sweep 범위
 
         print(f"    Pm values: {[f'{Pm:.4f}' for Pm in Pm_list]}")
