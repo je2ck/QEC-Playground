@@ -208,25 +208,28 @@ def plot_threshold_vs_Pm(Pm_list, thresholds, threshold_errs=None,
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    ax.plot(Pm_valid, th_valid, 'o-', color='C0', markersize=7,
+    # y축을 %로 표시
+    th_valid_pct = [t * 100 for t in th_valid]
+
+    ax.plot(Pm_valid, th_valid_pct, 'o-', color='C0', markersize=7,
             linewidth=2)
 
     ax.set_xlabel('Measurement error probability, $P_m$', fontsize=14)
-    ax.set_ylabel('Threshold physical error rate, $p_{th}$', fontsize=14)
+    ax.set_ylabel('Threshold physical error rate, $p_{th}$ (%)', fontsize=14)
     ax.set_title(title, fontsize=13)
 
     ax.set_xlim(-0.001, max(Pm_valid) * 1.05 + 0.001)
-    y_min = min(th_valid) * 0.9
-    y_max = max(th_valid) * 1.1
+    y_min = min(th_valid_pct) * 0.9
+    y_max = max(th_valid_pct) * 1.1
     ax.set_ylim(y_min, y_max)
 
     ax.grid(True, which='major', linestyle='-', alpha=0.3)
     ax.grid(True, which='minor', linestyle=':', alpha=0.2)
 
     # 각 데이터 포인트에 값 표시
-    for Pm, th in zip(Pm_valid, th_valid):
-        ax.annotate(f'{th*100:.2f}%',
-                    xy=(Pm, th), xytext=(5, 10),
+    for Pm, th_pct in zip(Pm_valid, th_valid_pct):
+        ax.annotate(f'{th_pct:.2f}%',
+                    xy=(Pm, th_pct), xytext=(5, 10),
                     textcoords='offset points', fontsize=8,
                     color='C0', ha='left')
 
@@ -284,7 +287,7 @@ if __name__ == "__main__":
                         help='Output figure path')
     parser.add_argument('--data-dir', default='results_threshold_vs_Pm',
                         help='Directory for data files')
-    parser.add_argument('--threshold-method', default='adjacent',
+    parser.add_argument('--threshold-method', default='largest_pair',
                         choices=['adjacent', 'largest_pair', 'smallest_pair', 'all_pairs'],
                         help='Threshold estimation method')
     parser.add_argument('--plot-individual', action='store_true',
@@ -315,7 +318,7 @@ if __name__ == "__main__":
         Pm_list = np.linspace(0, 0.03, 13).tolist()  # [0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]
         code_distances = [3, 5, 7, 9, 11]
         runtime_budget = (1000, 120)
-        p_sweep = np.logspace(-2.5, -1, 12).tolist()  # 물리적 에러율 sweep 범위
+        p_sweep = np.logspace(-2.5, -1, 20).tolist()  # 물리적 에러율 sweep 범위
 
         print(f"    Pm values: {[f'{Pm:.4f}' for Pm in Pm_list]}")
         print(f"    Code distances: {code_distances}")
