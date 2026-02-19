@@ -208,15 +208,8 @@ def plot_threshold_vs_Pm(Pm_list, thresholds, threshold_errs=None,
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    has_errors = all(e is not None for e in err_valid)
-    if has_errors:
-        ax.errorbar(Pm_valid, th_valid, yerr=err_valid,
-                     fmt='o-', color='C0', markersize=7, linewidth=2,
-                     capsize=4, capthick=1.5, markerfacecolor='C0',
-                     markeredgecolor='C0', label='$p_{th}$ (Re=0)')
-    else:
-        ax.plot(Pm_valid, th_valid, 'o-', color='C0', markersize=7,
-                linewidth=2, label='$p_{th}$ (Re=0)')
+    ax.plot(Pm_valid, th_valid, 'o-', color='C0', markersize=7,
+            linewidth=2)
 
     ax.set_xlabel('Measurement error probability, $P_m$', fontsize=14)
     ax.set_ylabel('Threshold physical error rate, $p_{th}$', fontsize=14)
@@ -229,7 +222,6 @@ def plot_threshold_vs_Pm(Pm_list, thresholds, threshold_errs=None,
 
     ax.grid(True, which='major', linestyle='-', alpha=0.3)
     ax.grid(True, which='minor', linestyle=':', alpha=0.2)
-    ax.legend(fontsize=12, loc='best')
 
     # 각 데이터 포인트에 값 표시
     for Pm, th in zip(Pm_valid, th_valid):
@@ -322,8 +314,8 @@ if __name__ == "__main__":
         # ----- 설정 -----
         Pm_list = np.linspace(0, 0.03, 13).tolist()  # [0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]
         code_distances = [3, 5, 7, 9, 11]
-        runtime_budget = (300, 45)
-        p_sweep = np.logspace(-4, -1, 12).tolist()  # 물리적 에러율 sweep 범위
+        runtime_budget = (1000, 120)
+        p_sweep = np.logspace(-2.5, -1, 12).tolist()  # 물리적 에러율 sweep 범위
 
         print(f"    Pm values: {[f'{Pm:.4f}' for Pm in Pm_list]}")
         print(f"    Code distances: {code_distances}")
