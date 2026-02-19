@@ -320,8 +320,8 @@ if __name__ == "__main__":
         print(f"    Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         # ----- 설정 -----
-        Pm_list = np.linspace(0, 0.03, 7).tolist()  # [0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]
-        code_distances = [5, 7, 9, 11]
+        Pm_list = np.linspace(0, 0.03, 13).tolist()  # [0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]
+        code_distances = [3, 5, 7, 9, 11]
         runtime_budget = (300, 45)
         p_sweep = np.logspace(-4, -1, 12).tolist()  # 물리적 에러율 sweep 범위
 
