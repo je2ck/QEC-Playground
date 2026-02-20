@@ -507,14 +507,13 @@ def _quadratic_approx_curve(p_d_pair, A, B, C, pc0, v0):
 
 def estimate_threshold_from_data(results, code_distances, verbose=True, **kwargs):
     """
-    데이터로부터 threshold 추정 (finite-size scaling curve fitting)
+    데이터로부터 threshold 추정 (하이브리드: crossing + curve fitting)
     
-    ThresholdAnalyzer와 동일한 quadratic ansatz를 사용:
+    1단계: 교차점 방식으로 대략적인 threshold 위치 파악
+    2단계: threshold 근처 데이터만 필터링하여 finite-size scaling curve fitting
+    
+    ThresholdAnalyzer와 동일한 quadratic ansatz:
         pL(p, d) = A + B * x + C * x^2,  x = (p - p_c) * d^(1/v)
-    scipy.curve_fit으로 5개 파라미터 (A, B, C, p_c, v)를 피팅하여
-    threshold p_c와 오차를 직접 산출합니다.
-    
-    피팅 실패 시 교차점 기반 fallback을 사용합니다.
     
     Args:
         results: {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
@@ -530,7 +529,31 @@ def estimate_threshold_from_data(results, code_distances, verbose=True, **kwargs
 
     sorted_d = sorted(code_distances)
 
-    # 데이터 준비
+    # 1단계: crossing point로 대략적인 threshold 위치 파악
+    crossings = []
+    for i in range(len(sorted_d) - 1):
+        d1, d2 = sorted_d[i], sorted_d[i + 1]
+        crossing = find_crossing_point(results, d1, d2, verbose=False)
+        if crossing is not None and crossing > 0:
+            crossings.append(crossing)
+
+    if not crossings:
+        if verbose:
+            print(f"  [Threshold] No crossing points found")
+        return None, None
+
+    rough_threshold = np.median(crossings)
+    crossing_spread = np.std(crossings) if len(crossings) > 1 else rough_threshold * 0.3
+
+    if verbose:
+        print(f"  [Step 1] Rough threshold from crossings: {rough_threshold:.6f} ({rough_threshold*100:.3f}%)")
+        print(f"           {len(crossings)} crossings, spread = {crossing_spread:.6f}")
+
+    # 2단계: threshold 근처 데이터만 필터링하여 curve fitting
+    # threshold 주변 ±3배 범위의 데이터만 사용
+    p_window_low = rough_threshold * 0.2
+    p_window_high = rough_threshold * 5.0
+
     x_data = []
     y_data = []
     sigma = []
@@ -539,31 +562,36 @@ def estimate_threshold_from_data(results, code_distances, verbose=True, **kwargs
         if d not in results:
             continue
         for i, p in enumerate(results[d]["p"]):
+            if p < p_window_low or p > p_window_high:
+                continue
             pL = results[d]["pL"][i]
             pL_dev = results[d]["pL_dev"][i] if i < len(results[d]["pL_dev"]) else 0.1
-            if pL > 0 and pL < 1:  # 유효한 데이터만
+            if pL > 0 and pL < 1:
                 x_data.append((p, d))
                 y_data.append(pL)
-                sigma.append(max(pL_dev, 0.001))  # 최소 오차
+                sigma.append(max(pL_dev, 0.001))
 
     if len(x_data) < 5:
         if verbose:
-            print(f"  [Fit] Not enough data points ({len(x_data)}), falling back to crossing method")
-        return _estimate_threshold_crossing_fallback(results, sorted_d, verbose)
+            print(f"  [Step 2] Not enough data near threshold ({len(x_data)} points), using crossing result")
+        threshold_err = crossing_spread if crossing_spread > 0 else rough_threshold * 0.1
+        return rough_threshold, threshold_err
 
     try:
         p_values = [x[0] for x in x_data]
         guess_A = np.average(y_data)
-        guess_pc0 = np.median(p_values)
 
-        p_range = max(p_values) - min(p_values)
-        lower_bounds = [min(y_data) * 0.1, -np.inf, -100, max(min(p_values) * 0.1, 1e-6), 0.5]
-        upper_bounds = [max(y_data) * 2, np.inf, 100, max(p_values) + p_range, 3]
+        # pc0의 범위: crossing 결과 근처로 제한
+        pc0_lower = max(rough_threshold * 0.3, 1e-6)
+        pc0_upper = rough_threshold * 3.0
+
+        lower_bounds = [min(y_data) * 0.1, -np.inf, -100, pc0_lower, 0.5]
+        upper_bounds = [max(y_data) * 2, np.inf, 100, pc0_upper, 3]
 
         popt, pcov = curve_fit(
             _quadratic_approx_curve, x_data, y_data,
             sigma=sigma, absolute_sigma=False,
-            p0=[guess_A, 1, 0.1, guess_pc0, 1],
+            p0=[guess_A, 1, 0.1, rough_threshold, 1],
             bounds=(lower_bounds, upper_bounds),
             maxfev=10000
         )
@@ -573,38 +601,17 @@ def estimate_threshold_from_data(results, code_distances, verbose=True, **kwargs
         threshold_err = perr[3]
 
         if verbose:
-            print(f"  [Fit] A={popt[0]:.4f}, B={popt[1]:.4f}, C={popt[2]:.4f}")
-            print(f"        pc0={threshold:.6f} ± {threshold_err:.6f}, v0={popt[4]:.4f}")
-            print(f"  => Estimated threshold: {threshold:.6f} ({threshold*100:.3f}%) ± {threshold_err:.6f}")
+            print(f"  [Step 2] Curve fit: A={popt[0]:.4f}, B={popt[1]:.4f}, C={popt[2]:.4f}")
+            print(f"           pc0={threshold:.6f} ± {threshold_err:.6f}, v0={popt[4]:.4f}")
+            print(f"  => Threshold: {threshold:.6f} ({threshold*100:.3f}%) ± {threshold_err:.6f}")
 
         return threshold, threshold_err
 
     except Exception as e:
         if verbose:
-            print(f"  [Fit] Curve fitting failed: {e}, falling back to crossing method")
-        return _estimate_threshold_crossing_fallback(results, sorted_d, verbose)
-
-
-def _estimate_threshold_crossing_fallback(results, sorted_d, verbose):
-    """교차점 기반 fallback (피팅 실패 시 사용)"""
-    crossings = []
-    for i in range(len(sorted_d) - 1):
-        d1, d2 = sorted_d[i], sorted_d[i + 1]
-        crossing = find_crossing_point(results, d1, d2, verbose=verbose)
-        if crossing is not None and crossing > 0:
-            if verbose:
-                print(f"  [Fallback] Crossing d={d1} & d={d2}: p = {crossing:.6f}")
-            crossings.append(crossing)
-
-    if not crossings:
-        return None, None
-
-    threshold = np.mean(crossings)
-    threshold_err = np.std(crossings) if len(crossings) > 1 else threshold * 0.1
-
-    if verbose:
-        print(f"  [Fallback] Estimated threshold: {threshold:.6f} ± {threshold_err:.6f}")
-    return threshold, threshold_err
+            print(f"  [Step 2] Curve fitting failed: {e}, using crossing result")
+        threshold_err = crossing_spread if crossing_spread > 0 else rough_threshold * 0.1
+        return rough_threshold, threshold_err
 
 
 def merge_results(results1, results2):
