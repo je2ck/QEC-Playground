@@ -557,7 +557,7 @@ def estimate_threshold_from_data(results, code_distances, verbose=True, **kwargs
         guess_pc0 = np.median(p_values)
 
         p_range = max(p_values) - min(p_values)
-        lower_bounds = [min(y_data) * 0.1, -np.inf, -100, min(p_values) - p_range, 0.5]
+        lower_bounds = [min(y_data) * 0.1, -np.inf, -100, max(min(p_values) * 0.1, 1e-6), 0.5]
         upper_bounds = [max(y_data) * 2, np.inf, 100, max(p_values) + p_range, 3]
 
         popt, pcov = curve_fit(
