@@ -40,6 +40,7 @@ from threshold_analyzer import (
 )
 
 from utils import ProgressTracker, resolve_parallel_workers
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 # ============== 시뮬레이션 함수 ==============
@@ -246,7 +247,10 @@ if __name__ == "__main__":
                         help='Output figure path')
     parser.add_argument('--data-dir', default='results_threshold_vs_Pm',
                         help='Directory for data files')
+    parser.add_argument('--parallel', type=int, default=1,
+                        help='Number of parallel workers for Pm values (0 = all cores, 1 = sequential)')
     args = parser.parse_args()
+    args.parallel = resolve_parallel_workers(args.parallel)
 
     os.makedirs(args.data_dir, exist_ok=True)
     if not os.path.isabs(args.output):
@@ -272,24 +276,41 @@ if __name__ == "__main__":
         print(f"    Rough code distances: {rough_code_distances}")
         print(f"    Precise code distances: {code_distances}")
 
-        thresholds = []
-        threshold_errs = []
+        thresholds = [None] * len(Pm_list)
+        threshold_errs = [None] * len(Pm_list)
 
-        pm_tracker = ProgressTracker(len(Pm_list), "Pm values", print_every=1)
-        for Pm in Pm_list:
-            pm_tracker.begin_task()
-            th, th_err = find_threshold_for_Pm(
-                Pm, Rm, Rc, code_distances, rough_code_distances,
-                rough_runtime_budget, runtime_budget,
-            )
-            thresholds.append(th)
-            threshold_errs.append(th_err)
-            pm_tracker.end_task()
-        pm_tracker.summary()
+        if args.parallel > 1:
+            print(f"    Parallel workers: {args.parallel}")
+            with ProcessPoolExecutor(max_workers=args.parallel) as executor:
+                futures = {}
+                for idx, Pm in enumerate(Pm_list):
+                    fut = executor.submit(
+                        find_threshold_for_Pm,
+                        Pm, Rm, Rc, code_distances, rough_code_distances,
+                        rough_runtime_budget, runtime_budget,
+                    )
+                    futures[fut] = idx
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    th, th_err = fut.result()
+                    thresholds[idx] = th
+                    threshold_errs[idx] = th_err
+                    print(f"    [{idx+1}/{len(Pm_list)}] Pm={Pm_list[idx]:.4f} done")
+        else:
+            pm_tracker = ProgressTracker(len(Pm_list), "Pm values", print_every=1)
+            for idx, Pm in enumerate(Pm_list):
+                pm_tracker.begin_task()
+                th, th_err = find_threshold_for_Pm(
+                    Pm, Rm, Rc, code_distances, rough_code_distances,
+                    rough_runtime_budget, runtime_budget,
+                )
+                thresholds[idx] = th
+                threshold_errs[idx] = th_err
+                pm_tracker.end_task()
+            pm_tracker.summary()
 
-        # 결과 저장
         all_data = {
-            "Pm_list": Pm_list,
+            "Pm_list": [float(x) for x in Pm_list],
             "thresholds": [float(t) if t is not None else None for t in thresholds],
             "threshold_errs": [float(e) if e is not None else None for e in threshold_errs],
             "params": {"Rm": Rm, "Rc": Rc,
@@ -332,20 +353,38 @@ if __name__ == "__main__":
         print(f"    Rough code distances: {rough_code_distances}")
         print(f"    Precise code distances: {code_distances}")
 
-        thresholds = []
-        threshold_errs = []
+        thresholds = [None] * len(Pm_list)
+        threshold_errs = [None] * len(Pm_list)
 
-        pm_tracker = ProgressTracker(len(Pm_list), "Pm values", print_every=1)
-        for Pm in Pm_list:
-            pm_tracker.begin_task()
-            th, th_err = find_threshold_for_Pm(
-                Pm, Rm, Rc, code_distances, rough_code_distances,
-                rough_runtime_budget, runtime_budget,
-            )
-            thresholds.append(th)
-            threshold_errs.append(th_err)
-            pm_tracker.end_task()
-        pm_tracker.summary()
+        if args.parallel > 1:
+            print(f"    Parallel workers: {args.parallel}")
+            with ProcessPoolExecutor(max_workers=args.parallel) as executor:
+                futures = {}
+                for idx, Pm in enumerate(Pm_list):
+                    fut = executor.submit(
+                        find_threshold_for_Pm,
+                        Pm, Rm, Rc, code_distances, rough_code_distances,
+                        rough_runtime_budget, runtime_budget,
+                    )
+                    futures[fut] = idx
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    th, th_err = fut.result()
+                    thresholds[idx] = th
+                    threshold_errs[idx] = th_err
+                    print(f"    [{idx+1}/{len(Pm_list)}] Pm={Pm_list[idx]:.4f} done")
+        else:
+            pm_tracker = ProgressTracker(len(Pm_list), "Pm values", print_every=1)
+            for idx, Pm in enumerate(Pm_list):
+                pm_tracker.begin_task()
+                th, th_err = find_threshold_for_Pm(
+                    Pm, Rm, Rc, code_distances, rough_code_distances,
+                    rough_runtime_budget, runtime_budget,
+                )
+                thresholds[idx] = th
+                threshold_errs[idx] = th_err
+                pm_tracker.end_task()
+            pm_tracker.summary()
 
         all_data = {
             "Pm_list": Pm_list,
