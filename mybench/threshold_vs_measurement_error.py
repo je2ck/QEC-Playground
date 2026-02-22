@@ -161,6 +161,52 @@ def find_threshold_for_Pm(Pm, Rm, Rc, code_distances, rough_code_distances,
         return None, None
 
 
+def find_threshold_for_Pm_robust(Pm, Rm, Rc, code_distances, rough_code_distances,
+                                 rough_runtime_budget, runtime_budget,
+                                 n_trials=3, verbose=True):
+    """
+    하나의 Pm 값에 대해 n_trials 번 독립 threshold 추정을 수행하고
+    median을 반환하여 outlier의 영향을 줄임.
+
+    Returns:
+        threshold: median threshold (없으면 None)
+        threshold_err: median absolute deviation (없으면 None)
+    """
+    print(f"\n{'#'*60}")
+    print(f"  Robust threshold estimation for Pm = {Pm:.4f} ({n_trials} trials)")
+    print(f"{'#'*60}")
+
+    valid_thresholds = []
+    valid_errs = []
+
+    for trial in range(n_trials):
+        print(f"\n  --- Trial {trial+1}/{n_trials} for Pm={Pm:.4f} ---")
+        th, th_err = find_threshold_for_Pm(
+            Pm, Rm, Rc, code_distances, rough_code_distances,
+            rough_runtime_budget, runtime_budget,
+            verbose=verbose,
+        )
+        if th is not None:
+            valid_thresholds.append(th)
+            valid_errs.append(th_err if th_err is not None else 0)
+
+    if not valid_thresholds:
+        print(f"    ✗ Pm={Pm:.4f} → all {n_trials} trials failed")
+        return None, None
+
+    median_th = float(np.median(valid_thresholds))
+    # MAD (median absolute deviation) as robust error estimate
+    if len(valid_thresholds) >= 3:
+        mad = float(np.median(np.abs(np.array(valid_thresholds) - median_th)))
+    else:
+        mad = float(np.mean(valid_errs))
+
+    print(f"    ★★ Pm={Pm:.4f} → median p_th = {median_th:.6f} ({median_th*100:.3f}%)")
+    print(f"         trials: {[f'{t*100:.3f}%' for t in valid_thresholds]}")
+    print(f"         MAD = {mad:.6f} ({mad*100:.4f}%)")
+    return median_th, mad
+
+
 # ============== 저장/로드 ==============
 
 def save_results(data, filename):
@@ -241,7 +287,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description='Threshold vs Measurement Error Probability (Re=0)')
-    parser.add_argument('--mode', choices=['quick', 'full', 'plot'],
+    parser.add_argument('--mode', choices=['quick', 'full', 'enhanced', 'plot'],
                         default='quick', help='Simulation mode')
     parser.add_argument('--output', default='threshold_vs_Pm.pdf',
                         help='Output figure path')
@@ -411,6 +457,92 @@ if __name__ == "__main__":
 
         plot_threshold_vs_Pm(Pm_list, thresholds, threshold_errs,
                              save_path=args.output)
+
+        print(f"\n    End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    elif args.mode == 'enhanced':
+        print("=== Enhanced mode: Threshold vs Pm (Re=0) ===")
+        print(f"    Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("    → Larger code distances + more statistics + 3-trial median")
+
+        Pm_list = np.linspace(0, 0.03, 13).tolist()
+        rough_code_distances = [7, 9]
+        code_distances = [7, 9, 11, 13]
+        rough_runtime_budget = (3000, 120)     # rough: 3000 에러, 120초
+        runtime_budget = (10000, 600)           # precise: 10000 에러, 600초
+        n_trials = 3                            # 독립 3회 시행
+
+        print(f"    Pm values: {[f'{Pm:.4f}' for Pm in Pm_list]}")
+        print(f"    Rough code distances: {rough_code_distances}")
+        print(f"    Precise code distances: {code_distances}")
+        print(f"    Rough budget: {rough_runtime_budget}")
+        print(f"    Precise budget: {runtime_budget}")
+        print(f"    Trials per Pm: {n_trials}")
+
+        thresholds = [None] * len(Pm_list)
+        threshold_errs = [None] * len(Pm_list)
+
+        if args.parallel > 1:
+            print(f"    Parallel workers: {args.parallel}")
+            with ProcessPoolExecutor(max_workers=args.parallel) as executor:
+                futures = {}
+                for idx, Pm in enumerate(Pm_list):
+                    fut = executor.submit(
+                        find_threshold_for_Pm_robust,
+                        Pm, Rm, Rc, code_distances, rough_code_distances,
+                        rough_runtime_budget, runtime_budget,
+                        n_trials=n_trials,
+                    )
+                    futures[fut] = idx
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    th, th_err = fut.result()
+                    thresholds[idx] = th
+                    threshold_errs[idx] = th_err
+                    print(f"    [{idx+1}/{len(Pm_list)}] Pm={Pm_list[idx]:.4f} done → {th*100:.3f}%" if th else f"    [{idx+1}/{len(Pm_list)}] Pm={Pm_list[idx]:.4f} FAILED")
+        else:
+            pm_tracker = ProgressTracker(len(Pm_list), "Pm values", print_every=1)
+            for idx, Pm in enumerate(Pm_list):
+                pm_tracker.begin_task()
+                th, th_err = find_threshold_for_Pm_robust(
+                    Pm, Rm, Rc, code_distances, rough_code_distances,
+                    rough_runtime_budget, runtime_budget,
+                    n_trials=n_trials,
+                )
+                thresholds[idx] = th
+                threshold_errs[idx] = th_err
+                pm_tracker.end_task()
+            pm_tracker.summary()
+
+        all_data = {
+            "Pm_list": [float(x) for x in Pm_list],
+            "thresholds": [float(t) if t is not None else None for t in thresholds],
+            "threshold_errs": [float(e) if e is not None else None for e in threshold_errs],
+            "params": {"Rm": Rm, "Rc": Rc,
+                       "rough_code_distances": rough_code_distances,
+                       "code_distances": code_distances,
+                       "n_trials": n_trials,
+                       "mode": "enhanced"},
+        }
+        save_results(all_data, os.path.join(args.data_dir, "results_enhanced.json"))
+
+        # 결과 요약
+        print(f"\n{'='*60}")
+        print(f"  Summary: Threshold vs Pm (Re=0) [ENHANCED]")
+        print(f"{'='*60}")
+        print(f"  {'Pm':>8s}  {'p_th':>12s}  {'p_th (%)':>10s}  {'± MAD':>10s}")
+        print(f"  {'-'*44}")
+        for Pm, th, err in zip(Pm_list, thresholds, threshold_errs):
+            if th is not None:
+                err_str = f"{err*100:.4f}%" if err else "N/A"
+                print(f"  {Pm:>8.4f}  {th:>12.6f}  {th*100:>9.3f}%  {err_str:>10s}")
+            else:
+                print(f"  {Pm:>8.4f}  {'N/A':>12s}  {'N/A':>10s}  {'N/A':>10s}")
+
+        # 그래프
+        plot_threshold_vs_Pm(Pm_list, thresholds, threshold_errs,
+                             save_path=args.output,
+                             title="Threshold vs Measurement Error Probability (Re=0) [Enhanced]")
 
         print(f"\n    End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
