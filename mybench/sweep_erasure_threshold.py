@@ -690,7 +690,10 @@ if __name__ == "__main__":
             lambda_era = compute_lambda_factor(results_era, fast_distances)
 
             # Use median lambda as ranking metric (robust to outliers)
-            lambda_vals = [v for v in lambda_era.values() if v is not None and np.isfinite(v)]
+            # lambda_era is {(d_s, d_l): {"p": [...], "lambda": [...], ...}}
+            lambda_vals = []
+            for pair_data in lambda_era.values():
+                lambda_vals.extend([v for v in pair_data["lambda"] if np.isfinite(v)])
             median_lambda = float(np.median(lambda_vals)) if lambda_vals else 0
 
             search_results.append({
