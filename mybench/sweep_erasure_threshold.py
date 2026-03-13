@@ -10,6 +10,9 @@ Parameters (from sweep CSV row at chosen delta):
   Rm = P_erase_error_loss_cdf                   (P(erasure | error))
   Rc = P_erase_correct_loss_cdf                 (P(erasure | correct))
 
+Optional override:
+    Pm = 1 - fidelity                             (when --fidelity is provided)
+
 Usage:
     # List available deltas and their Rm/Rc:
     python sweep_erasure_threshold.py --sweep-csv erasure_unsup_sweep.csv --mode list
@@ -510,11 +513,22 @@ if __name__ == "__main__":
                         help='Override Pm (measurement error rate). Use when Rm/Rc '
                              'are from Gaussian posterior with a different Pm than '
                              'the raw label rate in CSV. E.g. --pm-override 0.001')
+    parser.add_argument('--fidelity', type=float, default=None,
+                        help='Measurement fidelity in [0, 1]. If provided, use '
+                             'Pm = 1 - fidelity as the measurement error rate.')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
-    pm_override = args.pm_override
+    if args.fidelity is not None and not (0 <= args.fidelity <= 1):
+        print("Error: --fidelity must be in [0, 1]")
+        sys.exit(1)
+
+    # Priority: fidelity-derived Pm > explicit Pm override > CSV N_error/N_total.
+    pm_override = (1 - args.fidelity) if args.fidelity is not None else args.pm_override
     if pm_override is not None:
-        print(f"[info] Using Pm override: {pm_override} (ignoring N_error/N_total from CSV)")
+        if args.fidelity is not None:
+            print(f"[info] Using fidelity={args.fidelity} -> Pm={pm_override} (ignoring N_error/N_total from CSV)")
+        else:
+            print(f"[info] Using Pm override: {pm_override} (ignoring N_error/N_total from CSV)")
 
     # Parse sweep CSV
     sweep_rows = parse_sweep_csv(args.sweep_csv)
@@ -764,6 +778,24 @@ if __name__ == "__main__":
         # Summary plot of search phase
         summary_plot = os.path.join(search_data_dir, "search_delta_comparison.pdf")
         plot_delta_sweep_summary(search_results, save_path=summary_plot)
+
+        # Save final search report
+        search_report = {
+            "best_delta": best_delta,
+            "best_Pm": Pm,
+            "best_Rm": Rm,
+            "best_Rc": Rc,
+            "pm_override": pm_override,
+            "threshold_erasure": th_era,
+            "threshold_no_erasure": th_no,
+            "gain": th_era / th_no if th_era and th_no and th_no > 0 else None,
+            "full_distances": full_distances,
+            "full_budget": list(full_budget),
+            "fast_results": search_results,
+        }
+        report_path = os.path.join(search_data_dir, "search_report.json")
+        with open(report_path, 'w') as f:
+            json.dump(search_report, f, indent=2)
 
         print(f"\n{'='*70}")
         print(f"  SEARCH COMPLETE")
