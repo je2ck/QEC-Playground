@@ -190,8 +190,8 @@ def print_params_summary(Pm, Rm, Rc, delta, N_erasure_loss):
 
 # ============== Simulate Functions ==============
 
-def create_simulate_func_erasure(Pm, Rm, Rc):
-    """Hard erasure simulation function."""
+def create_simulate_func_erasure(Pm, Rm, Rc, pl=0.0):
+    """Hard erasure simulation function, optional atom loss."""
     measurement_error_rate = Pm * (1 - Rm)
     measurement_error_rate_with_erasure = Pm * Rm
     measurement_erasure_rate_no_error = (1 - Pm) * Rc
@@ -207,6 +207,8 @@ def create_simulate_func_erasure(Pm, Rm, Rc):
             "measurement_error_rate_with_erasure": measurement_error_rate_with_erasure,
             "measurement_erasure_rate_no_error": measurement_erasure_rate_no_error,
         }
+        if pl > 0:
+            config["ancilla_loss_probability"] = pl
 
         parameters = [
             "--code-type", "rotated-planar-code",
@@ -239,8 +241,8 @@ def create_simulate_func_erasure(Pm, Rm, Rc):
     return simulate_func
 
 
-def create_simulate_func_no_erasure(Pm):
-    """No-erasure baseline."""
+def create_simulate_func_no_erasure(Pm, pl=0.0):
+    """No-erasure baseline, optional atom loss."""
     def simulate_func(p, d, runtime_budget, p_graph=None):
         min_error_cases, time_budget = runtime_budget
         noisy_measurements = d
@@ -250,6 +252,8 @@ def create_simulate_func_no_erasure(Pm):
             "use_correlated_erasure": True,
             "measurement_error_rate": Pm,
         }
+        if pl > 0:
+            config["ancilla_loss_probability"] = pl
 
         parameters = [
             "--code-type", "rotated-planar-code",
@@ -581,7 +585,8 @@ def plot_delta_sweep_summary(sweep_summary, save_path="sweep_delta_comparison.pd
 def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
                      data_dir, n_workers=1, fresh=False, pm_override=None,
                      use_threshold_analyzer=False,
-                     rough_code_distances=None, rough_runtime_budget=None):
+                     rough_code_distances=None, rough_runtime_budget=None,
+                     atom_loss=0.0):
     """
     Run erasure + no-erasure simulation for a single delta.
 
@@ -589,6 +594,7 @@ def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
         use_threshold_analyzer: True이면 ThresholdAnalyzer도 실행하여 결과 병합
         rough_code_distances: ThresholdAnalyzer용 rough search code distances
         rough_runtime_budget: ThresholdAnalyzer용 rough search runtime budget
+        atom_loss: ancilla loss probability per round (default: 0)
 
     Returns:
         (results_erasure, results_no_erasure, Pm, Rm, Rc, delta_actual)
@@ -596,6 +602,8 @@ def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
     row = find_row_by_delta(sweep_rows, delta)
     Pm, Rm, Rc, delta_actual, N_era = get_params_from_row(row, pm_override=pm_override)
     print_params_summary(Pm, Rm, Rc, delta_actual, N_era)
+    if atom_loss > 0:
+        print(f"  Atom loss probability: {atom_loss:.6f}")
 
     delta_tag = f"d{delta_actual:.3f}".replace('.', 'p')
     delta_dir = os.path.join(data_dir, delta_tag)
@@ -607,27 +615,28 @@ def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
     print(f"\n{'='*60}")
     print(f" [1/2] Hard erasure (delta={delta_actual}, Rm={Rm:.4f}, Rc={Rc:.6f})")
     print(f"{'='*60}")
-    sim_era = create_simulate_func_erasure(Pm, Rm, Rc)
+    sim_era = create_simulate_func_erasure(Pm, Rm, Rc, pl=atom_loss)
     results_era = run_p_sweep_with_checkpoint(
         sim_era, code_distances, p_list, runtime_budget,
         checkpoint_path=os.path.join(delta_dir, "checkpoint_erasure.json"),
         n_workers=n_workers)
     save_results(results_era,
                  {"delta": delta_actual, "Pm": Pm, "Rm": Rm, "Rc": Rc,
-                  "type": "erasure"},
+                  "type": "erasure", "atom_loss": atom_loss},
                  os.path.join(delta_dir, "results_erasure.json"))
 
     # 2) No erasure — p sweep
     print(f"\n{'='*60}")
     print(f" [2/2] No erasure (Pm={Pm:.6f})")
     print(f"{'='*60}")
-    sim_no = create_simulate_func_no_erasure(Pm)
+    sim_no = create_simulate_func_no_erasure(Pm, pl=atom_loss)
     results_no = run_p_sweep_with_checkpoint(
         sim_no, code_distances, p_list, runtime_budget,
         checkpoint_path=os.path.join(delta_dir, "checkpoint_no_erasure.json"),
         n_workers=n_workers)
     save_results(results_no,
-                 {"delta": delta_actual, "Pm": Pm, "type": "no_erasure"},
+                 {"delta": delta_actual, "Pm": Pm, "type": "no_erasure",
+                  "atom_loss": atom_loss},
                  os.path.join(delta_dir, "results_no_erasure.json"))
 
     # 3) ThresholdAnalyzer (optional)
@@ -723,6 +732,8 @@ if __name__ == "__main__":
     parser.add_argument('--threshold-analyzer', action='store_true',
                         help='Also run ThresholdAnalyzer (wu_threshold.py style) '
                              'for more precise threshold estimation via fitting')
+    parser.add_argument('--atom-loss', type=float, default=0.0,
+                        help='Atom loss probability per round (default: 0)')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
     if args.fidelity is not None and not (0 <= args.fidelity <= 1):
@@ -794,7 +805,8 @@ if __name__ == "__main__":
                 sweep_rows, delta, code_distances, p_list, runtime_budget,
                 data_dir, n_workers=args.parallel, fresh=args.fresh,
                 pm_override=pm_override,
-                use_threshold_analyzer=args.threshold_analyzer)
+                use_threshold_analyzer=args.threshold_analyzer,
+                atom_loss=args.atom_loss)
 
             # Threshold estimate — crossing method
             th_era, _ = estimate_threshold_from_data(results_era, code_distances, verbose=True)
@@ -910,7 +922,7 @@ if __name__ == "__main__":
             delta_dir = os.path.join(search_data_dir, delta_tag)
             os.makedirs(delta_dir, exist_ok=True)
 
-            sim_era = create_simulate_func_erasure(Pm, Rm, Rc)
+            sim_era = create_simulate_func_erasure(Pm, Rm, Rc, pl=args.atom_loss)
             results_era = run_p_sweep_with_checkpoint(
                 sim_era, fast_distances, fast_p_list, fast_budget,
                 checkpoint_path=os.path.join(delta_dir, "checkpoint_fast_erasure.json"),
@@ -979,7 +991,8 @@ if __name__ == "__main__":
             sweep_rows, best_delta, full_distances, full_p_list, full_budget,
             data_dir, n_workers=args.parallel, fresh=False,
             pm_override=pm_override,
-            use_threshold_analyzer=args.threshold_analyzer)
+            use_threshold_analyzer=args.threshold_analyzer,
+            atom_loss=args.atom_loss)
 
         th_era, _ = estimate_threshold_from_data(results_era, full_distances, verbose=True)
         th_no, _ = estimate_threshold_from_data(results_no, full_distances, verbose=True)
