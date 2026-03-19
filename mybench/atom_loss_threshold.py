@@ -14,7 +14,6 @@ Atom Loss Threshold Analysis
 import os
 import sys
 import json
-import time
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -28,13 +27,12 @@ qec_playground_root_dir = subprocess.run(
 sys.path.insert(0, os.path.join(qec_playground_root_dir, "benchmark", "threshold_analyzer"))
 
 from threshold_analyzer import (
-    ThresholdAnalyzer,
     qecp_benchmark_simulate_func_command_vec,
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
 
-from utils import find_crossing_point, estimate_threshold_from_data, merge_results, ProgressTracker, format_duration, run_parallel_simulations, scaled_runtime_budget, resolve_parallel_workers, run_p_sweep_with_checkpoint, clean_checkpoints
+from utils import estimate_threshold_from_data, resolve_parallel_workers, run_p_sweep_with_checkpoint, clean_checkpoints
 
 
 # ============== 시뮬레이션 함수 정의 ==============
@@ -110,102 +108,8 @@ def create_simulate_func(pl, Re=0, loss_as_erasure=False):
     return simulate_func
 
 
-# ============== ThresholdAnalyzer 설정 ==============
 
-def run_threshold_analysis(pl, Re, code_distances, rough_code_distances,
-                           rough_runtime_budget, runtime_budget,
-                           save_image=None, verbose=True, loss_as_erasure=False):
-    """
-    ThresholdAnalyzer를 사용하여 특정 pl과 Re에 대한 threshold 분석
-
-    Returns:
-        (threshold, threshold_error, collected_data)
-    """
-    mode_str = "erasure" if loss_as_erasure else "loss"
-    print("\n" + "="*70)
-    print(f" Threshold Analysis for pl = {pl}, Re = {Re}, mode = {mode_str}")
-    print("="*70)
-    _ta_start = time.time()
-
-    simulate_func = create_simulate_func(pl, Re, loss_as_erasure=loss_as_erasure)
-    
-    analyzer = ThresholdAnalyzer(
-        code_distances=code_distances,
-        simulate_func=simulate_func,
-        default_rough_runtime_budget=rough_runtime_budget,
-        default_runtime_budget=runtime_budget
-    )
-    
-    # 설정 조정
-    analyzer.rough_code_distances = rough_code_distances
-    analyzer.rough_runtime_budgets = [rough_runtime_budget] * len(rough_code_distances)
-    analyzer.verbose = verbose
-    
-    # 시작점 조정 (gate error threshold ~0.5-1%)
-    analyzer.rough_init_search_start_p = 0.05
-    
-    # Threshold 분석 실행
-    try:
-        analyzer.estimate(save_image=save_image)
-        # estimate()가 return 없이 끝나므로 직접 fit_results 호출
-        if analyzer.collected_data_list:
-            distances, p_list, collected_data = analyzer.collected_data_list[-1]
-            popt, perr = analyzer.fit_results(collected_data, p_list, distances)
-            threshold_fit = popt[3]  # ThresholdAnalyzer 피팅 결과 (pc0)
-            threshold_fit_err = perr[3]
-            print(f"\n>>> pl={pl}: Threshold (fitting) = {threshold_fit*100:.3f}% ± {threshold_fit_err*100:.3f}%")
-            
-            # 데이터 교차점으로도 계산 (이게 plot에 사용됨)
-            results_for_crossing = extract_plot_data(analyzer.collected_data_list, distances)
-            threshold_crossing, threshold_crossing_err = estimate_threshold_from_data(
-                results_for_crossing, distances, verbose=True)
-            if threshold_crossing is not None:
-                print(f">>> pl={pl}: Threshold (crossing) = {threshold_crossing*100:.3f}%")
-                threshold = threshold_crossing
-                threshold_err = threshold_crossing_err if threshold_crossing_err else threshold_fit_err
-            else:
-                threshold = threshold_fit
-                threshold_err = threshold_fit_err
-        else:
-            print("[ERROR] No data collected")
-            threshold, threshold_err = None, None
-    except Exception as e:
-        print(f"[ERROR] Threshold estimation failed: {e}")
-        import traceback
-        traceback.print_exc()
-        threshold, threshold_err = None, None
-    
-    print(f"\n  \u23f1  ThresholdAnalyzer finished in {format_duration(time.time() - _ta_start)}")
-    return threshold, threshold_err, analyzer.collected_data_list
-
-
-def extract_plot_data(collected_data_list, code_distances):
-    """
-    ThresholdAnalyzer의 collected_data_list에서 플롯용 데이터 추출
-    
-    Returns:
-        {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
-    """
-    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
-    
-    for (distances, p_list, collected_data) in collected_data_list:
-        for i, d in enumerate(distances):
-            if d in results:
-                for j, p in enumerate(p_list):
-                    pL, pL_dev = collected_data[i][j]
-                    results[d]["p"].append(p)
-                    results[d]["pL"].append(pL)
-                    results[d]["pL_dev"].append(pL_dev)
-    
-    # 정렬 (p 기준)
-    for d in results:
-        if len(results[d]["p"]) > 0:
-            sorted_indices = np.argsort(results[d]["p"])
-            results[d]["p"] = [results[d]["p"][i] for i in sorted_indices]
-            results[d]["pL"] = [results[d]["pL"][i] for i in sorted_indices]
-            results[d]["pL_dev"] = [results[d]["pL_dev"][i] for i in sorted_indices]
-    
-    return results
+# merge_results, find_crossing_point, estimate_threshold_from_data are imported from utils.py
 
 
 def run_p_sweep(pl, Re, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None, loss_as_erasure=False):
@@ -344,10 +248,58 @@ def plot_loss_error_comparison(results_pl0, results_pl002, code_distances,
     plt.show()
 
 
-def save_results(results, threshold, filename):
+def plot_single_case(results, code_distances, pl, Re=0, threshold=None, save_path=None):
+    """단일 pl 케이스의 pL vs p 플롯 (개별 PDF)"""
+    fig, ax = plt.subplots(figsize=(8, 6))
+    colors = {3: 'C0', 5: 'C1', 7: 'C2', 9: 'C3', 11: 'C4', 13: 'C5', 15: 'C6'}
+
+    for d in code_distances:
+        if d not in results or len(results[d]["p"]) == 0:
+            continue
+        color = colors.get(d, 'gray')
+        p_arr = np.array(results[d]["p"])
+        pL_arr = np.array(results[d]["pL"])
+        pL_dev_arr = np.array(results[d]["pL_dev"])
+        valid = pL_arr > 0
+        ax.errorbar(
+            p_arr[valid], pL_arr[valid],
+            yerr=pL_arr[valid] * pL_dev_arr[valid],
+            fmt='o-', color=color, markersize=5, capsize=2, linewidth=1.5,
+            label=f'd={d}',
+        )
+
+    if threshold is not None:
+        ax.axvline(x=threshold, color='red', linestyle='--', alpha=0.8, linewidth=1.5)
+        ax.text(threshold * 1.1, ax.get_ylim()[0] * 3,
+                f'$p_{{th}}$={threshold*100:.3f}%', fontsize=10, color='red')
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Physical error rate $p$', fontsize=13)
+    ax.set_ylabel('Logical error rate $p_L$', fontsize=13)
+    ax.legend(fontsize=10, loc='upper left')
+    ax.grid(True, which='major', linestyle='-', alpha=0.3)
+    ax.grid(True, which='minor', linestyle=':', alpha=0.2)
+
+    title = f"pl={pl}, Re={Re}"
+    if threshold is not None:
+        title += f"  |  $p_{{th}}$={threshold*100:.3f}%"
+    ax.set_title(title, fontsize=12)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def save_results(results, threshold, filename, fit_popt=None):
     """결과를 JSON으로 저장"""
     data = {
         "threshold": threshold,
+        "fit_popt": fit_popt,  # [A, B, C, pc0, v0] or None
         "results": {}
     }
     for d, vals in results.items():
@@ -368,11 +320,12 @@ def load_results(filename):
         data = json.load(f)
     
     threshold = data.get("threshold")
+    fit_popt = data.get("fit_popt")
     results = {}
     for d_str, vals in data["results"].items():
         results[int(d_str)] = vals
-    
-    return results, threshold
+
+    return results, threshold, fit_popt
 
 
 # ============== 메인 ==============
@@ -413,177 +366,109 @@ if __name__ == "__main__":
     
     loss_mode_str = "erasure" if args.loss_as_erasure else "loss"
     print(f"\n>>> Configuration: Re={args.Re}, loss_mode={loss_mode_str}, data_dir={args.data_dir}")
-    
+   
+    loss1 = 0.0076 
     if args.mode == 'quick':
-        # 빠른 테스트 (~15-30분)
-        print(f"=== Quick mode: Log-spaced p sweep + ThresholdAnalyzer (Re={args.Re}) ===")
-        
+        print(f"=== Quick mode: p sweep + crossing threshold (Re={args.Re}) ===")
+
         code_distances = [5, 7, 9, 11]
-        rough_code_distances = [5, 7]
-        rough_runtime_budget = (200, 30)    # 200 errors or 30 sec
-        runtime_budget = (500, 60)          # 500 errors or 60 sec
-        sweep_runtime_budget = (300, 45)    # sweep용
-        
-        # 논문처럼 10^-4 ~ 10^-1 로그 등간격 (quick: 12개 포인트)
+        runtime_budget = (300, 45)
         p_sweep_all = np.logspace(-4, -1, 12)
-        
-        # ========== pl = 0.00076 (0.076% measurement loss) ==========
-        # p_list_pl0 = p_sweep_all[p_sweep_all <= 0.02]
+
+        # ========== pl = 0.00076 ==========
         p_list_pl0 = p_sweep_all
-        print(f"\n>>> pl=0.00076, Re={args.Re}: p sweep from {p_list_pl0[0]:.1e} to {p_list_pl0[-1]:.1e} ({len(p_list_pl0)} points)")
-        results_pl0_sweep = run_p_sweep(0.00076, args.Re, code_distances, p_list_pl0.tolist(), sweep_runtime_budget,
-                                        n_workers=args.parallel,
-                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_sweep.json"),
-                                        loss_as_erasure=args.loss_as_erasure)
-
-        # ThresholdAnalyzer로 정밀 threshold 추정
-        th_pl0, th_pl0_err, data_pl0 = run_threshold_analysis(
-            pl=0.00076,
-            Re=args.Re,
-            code_distances=code_distances,
-            rough_code_distances=rough_code_distances,
-            rough_runtime_budget=rough_runtime_budget,
-            runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl0.pdf"),
-            loss_as_erasure=args.loss_as_erasure,
-        )
-        results_pl0_th = extract_plot_data(data_pl0, code_distances)
-
-        # 병합 및 저장
-        results_pl0 = merge_results(results_pl0_sweep, results_pl0_th)
+        print(f"\n>>> pl=0.00076, Re={args.Re}: p sweep ({len(p_list_pl0)} points)")
+        results_pl0 = run_p_sweep(0.00076, args.Re, code_distances, p_list_pl0.tolist(), runtime_budget,
+                                  n_workers=args.parallel,
+                                  checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0.json"),
+                                  loss_as_erasure=args.loss_as_erasure)
+        th_pl0, _ = estimate_threshold_from_data(results_pl0, code_distances, verbose=True)
         save_results(results_pl0, th_pl0, os.path.join(args.data_dir, "results_pl0.json"))
+        plot_single_case(results_pl0, code_distances, pl=0.00076, Re=args.Re, threshold=th_pl0,
+                         save_path=os.path.join(args.data_dir, "curve_pl0.pdf"))
 
-        # ========== pl = 0.0019 (0.19% measurement loss) ==========
-        # p_list_pm002 = p_sweep_all[p_sweep_all <= 0.02]
+        # ========== pl = 0.0038 ==========
         p_list_pl002 = p_sweep_all
-        print(f"\n>>> pl=0.0019, Re={args.Re}: p sweep from {p_list_pl002[0]:.1e} to {p_list_pl002[-1]:.1e} ({len(p_list_pl002)} points)")
-        results_pl002_sweep = run_p_sweep(0.0019, args.Re, code_distances, p_list_pl002.tolist(), sweep_runtime_budget,
-                                          n_workers=args.parallel,
-                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_sweep.json"),
-                                          loss_as_erasure=args.loss_as_erasure)
-
-        # ThresholdAnalyzer로 정밀 threshold 추정
-        th_pl002, th_pl002_err, data_pl002 = run_threshold_analysis(
-            pl=0.0038,
-            Re=args.Re,
-            code_distances=code_distances,
-            rough_code_distances=rough_code_distances,
-            rough_runtime_budget=rough_runtime_budget,
-            runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl002.pdf"),
-            loss_as_erasure=args.loss_as_erasure,
-        )
-        results_pl002_th = extract_plot_data(data_pl002, code_distances)
-        
-        # 병합 및 저장
-        results_pl002 = merge_results(results_pl002_sweep, results_pl002_th)
+        print(f"\n>>> pl=0.0038, Re={args.Re}: p sweep ({len(p_list_pl002)} points)")
+        results_pl002 = run_p_sweep(0.0038, args.Re, code_distances, p_list_pl002.tolist(), runtime_budget,
+                                    n_workers=args.parallel,
+                                    checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002.json"),
+                                    loss_as_erasure=args.loss_as_erasure)
+        th_pl002, _ = estimate_threshold_from_data(results_pl002, code_distances, verbose=True)
         save_results(results_pl002, th_pl002, os.path.join(args.data_dir, "results_pl002.json"))
-        
+        plot_single_case(results_pl002, code_distances, pl=0.0038, Re=args.Re, threshold=th_pl002,
+                         save_path=os.path.join(args.data_dir, "curve_pl002.pdf"))
+
         # Combined plot
         plot_loss_error_comparison(results_pl0, results_pl002, code_distances,
-                                           threshold_pl0=th_pl0, threshold_pl002=th_pl002,
-                                           Re=args.Re,
-                                           save_path=args.output)
-        
+                                  threshold_pl0=th_pl0, threshold_pl002=th_pl002,
+                                  Re=args.Re, save_path=args.output)
+
     elif args.mode == 'full':
-        # 논문용 (~수 시간)
-        print(f"=== Full mode: Log-spaced p sweep + ThresholdAnalyzer (Re={args.Re}, paper quality) ===")
-        
+        print(f"=== Full mode: p sweep + crossing threshold (Re={args.Re}, paper quality) ===")
+
         code_distances = [5, 7, 9, 11, 13, 15]
-        rough_code_distances = [5, 9]
-        rough_runtime_budget = (3000, 300)    # 3000 errors or 5 min
-        runtime_budget = (40000, 3600)           # 40000 errors or 1 hour
-        sweep_runtime_budget = (40000, 3600)     # sweep용 (paper level)
-        
-        # 논문처럼 10^-4 ~ 10^-1 로그 등간격 (full: 20개 포인트)
+        runtime_budget = (40000, 3600)
         p_sweep_all = np.logspace(-4, -1, 20)
-        
+
         # ========== pl = 0.00076 ==========
         p_list_pl0 = p_sweep_all[p_sweep_all <= 0.03]
-        print(f"\n>>> pl=0.00076, Re={args.Re}: p sweep from {p_list_pl0[0]:.1e} to {p_list_pl0[-1]:.1e} ({len(p_list_pl0)} points)")
-        results_pl0_sweep = run_p_sweep(0.00076, args.Re, code_distances, p_list_pl0.tolist(), sweep_runtime_budget,
-                                        n_workers=args.parallel,
-                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_full_sweep.json"),
-                                        loss_as_erasure=args.loss_as_erasure)
-
-        th_pl0, th_pl0_err, data_pl0 = run_threshold_analysis(
-            pl=0.00076,
-            Re=args.Re,
-            code_distances=code_distances,
-            rough_code_distances=rough_code_distances,
-            rough_runtime_budget=rough_runtime_budget,
-            runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl0_full.pdf"),
-            loss_as_erasure=args.loss_as_erasure,
-        )
-        results_pl0_th = extract_plot_data(data_pl0, code_distances)
-
-        results_pl0 = merge_results(results_pl0_sweep, results_pl0_th)
+        print(f"\n>>> pl=0.00076, Re={args.Re}: p sweep ({len(p_list_pl0)} points)")
+        results_pl0 = run_p_sweep(0.00076, args.Re, code_distances, p_list_pl0.tolist(), runtime_budget,
+                                  n_workers=args.parallel,
+                                  checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_full.json"),
+                                  loss_as_erasure=args.loss_as_erasure)
+        th_pl0, _ = estimate_threshold_from_data(results_pl0, code_distances, verbose=True)
         save_results(results_pl0, th_pl0, os.path.join(args.data_dir, "results_pl0_full.json"))
+        plot_single_case(results_pl0, code_distances, pl=0.00076, Re=args.Re, threshold=th_pl0,
+                         save_path=os.path.join(args.data_dir, "curve_pl0_full.pdf"))
 
-        # ========== pl = 0.0019 ==========
+        # ========== pl = 0.0038 ==========
         p_list_pl002 = p_sweep_all[p_sweep_all <= 0.03]
-        print(f"\n>>> pl=0.0019, Re={args.Re}: p sweep from {p_list_pl002[0]:.1e} to {p_list_pl002[-1]:.1e} ({len(p_list_pl002)} points)")
-        results_pl002_sweep = run_p_sweep(0.0019, args.Re, code_distances, p_list_pl002.tolist(), sweep_runtime_budget,
-                                          n_workers=args.parallel,
-                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_full_sweep.json"),
-                                          loss_as_erasure=args.loss_as_erasure)
-
-        th_pl002, th_pl002_err, data_pl002 = run_threshold_analysis(
-            pl=0.0019,
-            Re=args.Re,
-            code_distances=code_distances,
-            rough_code_distances=rough_code_distances,
-            rough_runtime_budget=rough_runtime_budget,
-            runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl002_full.pdf"),
-            loss_as_erasure=args.loss_as_erasure,
-        )
-        results_pl002_th = extract_plot_data(data_pl002, code_distances)
-        
-        results_pl002 = merge_results(results_pl002_sweep, results_pl002_th)
+        print(f"\n>>> pl=0.0038, Re={args.Re}: p sweep ({len(p_list_pl002)} points)")
+        results_pl002 = run_p_sweep(0.0038, args.Re, code_distances, p_list_pl002.tolist(), runtime_budget,
+                                    n_workers=args.parallel,
+                                    checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_full.json"),
+                                    loss_as_erasure=args.loss_as_erasure)
+        th_pl002, _ = estimate_threshold_from_data(results_pl002, code_distances, verbose=True)
         save_results(results_pl002, th_pl002, os.path.join(args.data_dir, "results_pl002_full.json"))
-        
+        plot_single_case(results_pl002, code_distances, pl=0.0038, Re=args.Re, threshold=th_pl002,
+                         save_path=os.path.join(args.data_dir, "curve_pl002_full.pdf"))
+
         # Combined plot
         plot_loss_error_comparison(results_pl0, results_pl002, code_distances,
-                                           threshold_pl0=th_pl0, threshold_pl002=th_pl002,
-                                           Re=args.Re,
-                                           save_path=args.output)
-        
+                                  threshold_pl0=th_pl0, threshold_pl002=th_pl002,
+                                  Re=args.Re, save_path=args.output)
+
     elif args.mode == 'plot':
-        # 기존 데이터로 플롯
         print(f"\n>>> Loading data from {args.data_dir} (Re={args.Re})")
         try:
-            results_pl0, th_pl0 = load_results(os.path.join(args.data_dir, "results_pl0.json"))
-            results_pl002, th_pl002 = load_results(os.path.join(args.data_dir, "results_pl002.json"))
+            results_pl0, th_pl0, _ = load_results(os.path.join(args.data_dir, "results_pl0.json"))
+            results_pl002, th_pl002, _ = load_results(os.path.join(args.data_dir, "results_pl002.json"))
         except FileNotFoundError:
-            results_pl0, th_pl0 = load_results(os.path.join(args.data_dir, "results_pl0_full.json"))
-            results_pl002, th_pl002 = load_results(os.path.join(args.data_dir, "results_pl002_full.json"))
-        
+            results_pl0, th_pl0, _ = load_results(os.path.join(args.data_dir, "results_pl0_full.json"))
+            results_pl002, th_pl002, _ = load_results(os.path.join(args.data_dir, "results_pl002_full.json"))
+
         code_distances = sorted(results_pl0.keys())
-        
-        # Threshold 계산 - crossing method 우선
-        th_pl0_err, th_pl002_err = None, None
-        
-        print(f"\n>>> pl=0.00076, Re={args.Re}: Calculating threshold from crossing points...")
-        th_pl0_cross, th_pl0_cross_err = estimate_threshold_from_data(results_pl0, code_distances, verbose=True)
+
+        # Threshold from crossing points
+        print(f"\n>>> pl=0.00076: threshold from crossing points...")
+        th_pl0_cross, _ = estimate_threshold_from_data(results_pl0, code_distances, verbose=True)
         if th_pl0_cross is not None:
             th_pl0 = th_pl0_cross
-            th_pl0_err = th_pl0_cross_err
-            print(f"    Threshold (crossing): {th_pl0*100:.3f}%")
-        else:
-            print("    Crossing method failed, using saved threshold")
-        
-        print(f"\n>>> pl=0.0019, Re={args.Re}: Calculating threshold from crossing points...")
-        th_pl002_cross, th_pl002_cross_err = estimate_threshold_from_data(results_pl002, code_distances, verbose=True)
+
+        print(f"\n>>> pl=0.0038: threshold from crossing points...")
+        th_pl002_cross, _ = estimate_threshold_from_data(results_pl002, code_distances, verbose=True)
         if th_pl002_cross is not None:
             th_pl002 = th_pl002_cross
-            th_pl002_err = th_pl002_cross_err
-            print(f"    Threshold (crossing): {th_pl002*100:.3f}%")
-        else:
-            print("    Crossing method failed, using saved threshold")
-        
+
+        # Individual plots
+        plot_single_case(results_pl0, code_distances, pl=0.00076, Re=args.Re, threshold=th_pl0,
+                         save_path=os.path.join(args.data_dir, "curve_pl0.pdf"))
+        plot_single_case(results_pl002, code_distances, pl=0.0038, Re=args.Re, threshold=th_pl002,
+                         save_path=os.path.join(args.data_dir, "curve_pl002.pdf"))
+
+        # Combined plot
         plot_loss_error_comparison(results_pl0, results_pl002, code_distances,
-                                           threshold_pl0=th_pl0, threshold_pl002=th_pl002,
-                                           Re=args.Re,
-                                           save_path=args.output)
+                                  threshold_pl0=th_pl0, threshold_pl002=th_pl002,
+                                  Re=args.Re, save_path=args.output)

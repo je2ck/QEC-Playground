@@ -38,6 +38,7 @@ import os
 import sys
 import json
 import csv
+import time
 import argparse
 import subprocess
 
@@ -53,12 +54,13 @@ qec_playground_root_dir = subprocess.run(
 sys.path.insert(0, os.path.join(qec_playground_root_dir, "benchmark", "threshold_analyzer"))
 
 from threshold_analyzer import (
+    ThresholdAnalyzer,
     qecp_benchmark_simulate_func_command_vec,
     run_qecp_command_get_stdout,
     compile_code_if_necessary,
 )
 from utils import (run_p_sweep_with_checkpoint, clean_checkpoints,
-    estimate_threshold_from_data,
+    estimate_threshold_from_data, merge_results, format_duration,
     compute_lambda_factor, print_lambda_summary, plot_lambda_comparison,
     resolve_parallel_workers, save_lambda_results,
 )
@@ -280,6 +282,160 @@ def create_simulate_func_no_erasure(Pm):
     return simulate_func
 
 
+# ============== ThresholdAnalyzer 방식 ==============
+
+def extract_plot_data(collected_data_list, code_distances):
+    """ThresholdAnalyzer의 collected_data_list에서 플롯용 데이터 추출"""
+    results = {d: {"p": [], "pL": [], "pL_dev": []} for d in code_distances}
+    for (distances, p_list, collected_data) in collected_data_list:
+        for i, d in enumerate(distances):
+            if d in results:
+                for j, p in enumerate(p_list):
+                    pL, pL_dev = collected_data[i][j]
+                    results[d]["p"].append(p)
+                    results[d]["pL"].append(pL)
+                    results[d]["pL_dev"].append(pL_dev)
+    for d in results:
+        if len(results[d]["p"]) > 0:
+            sorted_indices = np.argsort(results[d]["p"])
+            results[d]["p"] = [results[d]["p"][i] for i in sorted_indices]
+            results[d]["pL"] = [results[d]["pL"][i] for i in sorted_indices]
+            results[d]["pL_dev"] = [results[d]["pL_dev"][i] for i in sorted_indices]
+    return results
+
+
+def run_threshold_analysis(simulate_func, label,
+                           code_distances, rough_code_distances,
+                           rough_runtime_budget, runtime_budget,
+                           init_search_start_p=None,
+                           save_image=None, verbose=True):
+    """
+    ThresholdAnalyzer를 사용하여 threshold 분석 (wu_threshold.py 방식)
+
+    Args:
+        simulate_func: (p, d, runtime_budget, p_graph) -> (pL, pL_dev)
+        label: 로그용 라벨 (e.g. "erasure delta=0.495")
+        code_distances: 전체 code distances
+        rough_code_distances: rough search용 code distances
+        rough_runtime_budget: (min_error_cases, time_budget)
+        runtime_budget: (min_error_cases, time_budget)
+        init_search_start_p: rough search 시작 p (None이면 자동)
+        save_image: threshold plot 저장 경로
+        verbose: 상세 출력
+
+    Returns:
+        (threshold, threshold_err, collected_data_list)
+    """
+    print(f"\n{'='*70}")
+    print(f" ThresholdAnalyzer: {label}")
+    print(f"{'='*70}")
+    _ta_start = time.time()
+
+    analyzer = ThresholdAnalyzer(
+        code_distances=code_distances,
+        simulate_func=simulate_func,
+        default_rough_runtime_budget=rough_runtime_budget,
+        default_runtime_budget=runtime_budget,
+    )
+    analyzer.rough_code_distances = rough_code_distances
+    analyzer.rough_runtime_budgets = [rough_runtime_budget] * len(rough_code_distances)
+    analyzer.verbose = verbose
+
+    if init_search_start_p is not None:
+        analyzer.rough_init_search_start_p = init_search_start_p
+
+    try:
+        analyzer.estimate(save_image=save_image)
+
+        if analyzer.collected_data_list:
+            distances, p_list, collected_data = analyzer.collected_data_list[-1]
+            popt, perr = analyzer.fit_results(collected_data, p_list, distances)
+            threshold_fit = popt[3]
+            threshold_fit_err = perr[3]
+            print(f"\n>>> {label}: Threshold (fitting) = {threshold_fit*100:.3f}% ± {threshold_fit_err*100:.3f}%")
+
+            # crossing method도 시도
+            results_for_crossing = extract_plot_data(analyzer.collected_data_list, distances)
+            threshold_crossing, threshold_crossing_err = estimate_threshold_from_data(
+                results_for_crossing, distances, verbose=True)
+            if threshold_crossing is not None:
+                print(f">>> {label}: Threshold (crossing) = {threshold_crossing*100:.3f}%")
+                threshold = threshold_crossing
+                threshold_err = threshold_crossing_err if threshold_crossing_err else threshold_fit_err
+            else:
+                threshold = threshold_fit
+                threshold_err = threshold_fit_err
+        else:
+            print("[ERROR] No data collected")
+            threshold, threshold_err = None, None
+    except Exception as e:
+        print(f"[ERROR] ThresholdAnalyzer failed: {e}")
+        import traceback
+        traceback.print_exc()
+        threshold, threshold_err = None, None
+
+    print(f"\n  ThresholdAnalyzer finished in {format_duration(time.time() - _ta_start)}")
+    return threshold, threshold_err, analyzer.collected_data_list
+
+
+def fit_threshold_from_results(results, code_distances=None):
+    """
+    저장된 results 데이터에서 threshold를 quadratic fitting으로 계산
+    (ThresholdAnalyzer와 동일한 모델: A + B*x + C*x^2, x = (p - pc0) * d^(1/v0))
+    """
+    from scipy.optimize import curve_fit
+
+    if code_distances is None:
+        code_distances = sorted(results.keys())
+
+    def quadratic_approx_curve(p_d_pair, A, B, C, pc0, v0):
+        y_list = []
+        for p, d in p_d_pair:
+            x = (p - pc0) * (d ** (1. / v0))
+            y = A + B * x + C * (x ** 2)
+            y_list.append(y)
+        return y_list
+
+    x_data, y_data, sigma = [], [], []
+    for d in code_distances:
+        if d not in results:
+            continue
+        for i, p in enumerate(results[d]["p"]):
+            pL = results[d]["pL"][i]
+            pL_dev = results[d]["pL_dev"][i] if i < len(results[d]["pL_dev"]) else 0.1
+            if 0 < pL < 1:
+                x_data.append((p, d))
+                y_data.append(pL)
+                sigma.append(max(pL_dev, 0.001))
+
+    if len(x_data) < 5:
+        print(f"[WARNING] Not enough data points for fitting: {len(x_data)}")
+        return None, None
+
+    try:
+        p_values = [x[0] for x in x_data]
+        guess_pc0 = np.median(p_values)
+        p_range = max(p_values) - min(p_values)
+
+        popt, pcov = curve_fit(
+            quadratic_approx_curve, x_data, y_data,
+            sigma=sigma, absolute_sigma=False,
+            p0=[np.average(y_data), 1, 0.1, guess_pc0, 1],
+            bounds=(
+                [min(y_data) * 0.1, -np.inf, -100, min(p_values) - p_range, 0.5],
+                [max(y_data) * 2,    np.inf,  100, max(p_values) + p_range, 3],
+            ),
+            maxfev=10000,
+        )
+        perr = np.sqrt(np.diag(pcov))
+        threshold, threshold_err = popt[3], perr[3]
+        print(f"[Fit] pc0={threshold:.6f} ± {threshold_err:.6f}, v0={popt[4]:.4f}")
+        return threshold, threshold_err
+    except Exception as e:
+        print(f"[WARNING] Fitting failed: {e}")
+        return None, None
+
+
 # ============== I/O ==============
 
 def save_results(results, params, filename):
@@ -423,9 +579,16 @@ def plot_delta_sweep_summary(sweep_summary, save_path="sweep_delta_comparison.pd
 # ============== Run Simulation ==============
 
 def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
-                     data_dir, n_workers=1, fresh=False, pm_override=None):
+                     data_dir, n_workers=1, fresh=False, pm_override=None,
+                     use_threshold_analyzer=False,
+                     rough_code_distances=None, rough_runtime_budget=None):
     """
     Run erasure + no-erasure simulation for a single delta.
+
+    Args:
+        use_threshold_analyzer: True이면 ThresholdAnalyzer도 실행하여 결과 병합
+        rough_code_distances: ThresholdAnalyzer용 rough search code distances
+        rough_runtime_budget: ThresholdAnalyzer용 rough search runtime budget
 
     Returns:
         (results_erasure, results_no_erasure, Pm, Rm, Rc, delta_actual)
@@ -440,7 +603,7 @@ def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
     if fresh:
         clean_checkpoints(delta_dir)
 
-    # 1) Erasure
+    # 1) Erasure — p sweep
     print(f"\n{'='*60}")
     print(f" [1/2] Hard erasure (delta={delta_actual}, Rm={Rm:.4f}, Rc={Rc:.6f})")
     print(f"{'='*60}")
@@ -454,7 +617,7 @@ def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
                   "type": "erasure"},
                  os.path.join(delta_dir, "results_erasure.json"))
 
-    # 2) No erasure
+    # 2) No erasure — p sweep
     print(f"\n{'='*60}")
     print(f" [2/2] No erasure (Pm={Pm:.6f})")
     print(f"{'='*60}")
@@ -466,6 +629,47 @@ def run_single_delta(sweep_rows, delta, code_distances, p_list, runtime_budget,
     save_results(results_no,
                  {"delta": delta_actual, "Pm": Pm, "type": "no_erasure"},
                  os.path.join(delta_dir, "results_no_erasure.json"))
+
+    # 3) ThresholdAnalyzer (optional)
+    if use_threshold_analyzer:
+        r_rough = rough_code_distances or [code_distances[0], code_distances[1]]
+        r_rough_budget = rough_runtime_budget or (200, 30)
+
+        # Erasure
+        th_era, th_era_err, data_era = run_threshold_analysis(
+            sim_era, label=f"erasure delta={delta_actual}",
+            code_distances=code_distances,
+            rough_code_distances=r_rough,
+            rough_runtime_budget=r_rough_budget,
+            runtime_budget=runtime_budget,
+            init_search_start_p=0.05,
+            save_image=os.path.join(delta_dir, "ta_threshold_erasure.pdf"),
+        )
+        if data_era:
+            ta_results_era = extract_plot_data(data_era, code_distances)
+            results_era = merge_results(results_era, ta_results_era)
+            save_results(results_era,
+                         {"delta": delta_actual, "Pm": Pm, "Rm": Rm, "Rc": Rc,
+                          "type": "erasure", "threshold_analyzer": True},
+                         os.path.join(delta_dir, "results_erasure.json"))
+
+        # No erasure
+        th_no, th_no_err, data_no = run_threshold_analysis(
+            sim_no, label=f"no-erasure (Pm={Pm})",
+            code_distances=code_distances,
+            rough_code_distances=r_rough,
+            rough_runtime_budget=r_rough_budget,
+            runtime_budget=runtime_budget,
+            init_search_start_p=0.05,
+            save_image=os.path.join(delta_dir, "ta_threshold_no_erasure.pdf"),
+        )
+        if data_no:
+            ta_results_no = extract_plot_data(data_no, code_distances)
+            results_no = merge_results(results_no, ta_results_no)
+            save_results(results_no,
+                         {"delta": delta_actual, "Pm": Pm, "type": "no_erasure",
+                          "threshold_analyzer": True},
+                         os.path.join(delta_dir, "results_no_erasure.json"))
 
     # Lambda
     lambda_era = compute_lambda_factor(results_era, code_distances)
@@ -516,6 +720,9 @@ if __name__ == "__main__":
     parser.add_argument('--fidelity', type=float, default=None,
                         help='Measurement fidelity in [0, 1]. If provided, use '
                              'Pm = 1 - fidelity as the measurement error rate.')
+    parser.add_argument('--threshold-analyzer', action='store_true',
+                        help='Also run ThresholdAnalyzer (wu_threshold.py style) '
+                             'for more precise threshold estimation via fitting')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
     if args.fidelity is not None and not (0 <= args.fidelity <= 1):
@@ -586,11 +793,20 @@ if __name__ == "__main__":
             results_era, results_no, Pm, Rm, Rc, delta_actual = run_single_delta(
                 sweep_rows, delta, code_distances, p_list, runtime_budget,
                 data_dir, n_workers=args.parallel, fresh=args.fresh,
-                pm_override=pm_override)
+                pm_override=pm_override,
+                use_threshold_analyzer=args.threshold_analyzer)
 
-            # Threshold estimate
+            # Threshold estimate — crossing method
             th_era, _ = estimate_threshold_from_data(results_era, code_distances, verbose=True)
             th_no, _ = estimate_threshold_from_data(results_no, code_distances, verbose=True)
+
+            # Threshold estimate — fitting method (if enough data)
+            th_era_fit, th_era_fit_err = fit_threshold_from_results(results_era, code_distances)
+            th_no_fit, th_no_fit_err = fit_threshold_from_results(results_no, code_distances)
+            if th_era_fit is not None:
+                print(f"  Threshold (fitting) erasure:    {th_era_fit*100:.3f}% ± {th_era_fit_err*100:.3f}%")
+            if th_no_fit is not None:
+                print(f"  Threshold (fitting) no-erasure: {th_no_fit*100:.3f}% ± {th_no_fit_err*100:.3f}%")
 
             # Single-delta plot
             delta_tag = f"d{delta_actual:.3f}".replace('.', 'p')
@@ -762,7 +978,8 @@ if __name__ == "__main__":
         results_era, results_no, Pm, Rm, Rc, delta_actual = run_single_delta(
             sweep_rows, best_delta, full_distances, full_p_list, full_budget,
             data_dir, n_workers=args.parallel, fresh=False,
-            pm_override=pm_override)
+            pm_override=pm_override,
+            use_threshold_analyzer=args.threshold_analyzer)
 
         th_era, _ = estimate_threshold_from_data(results_era, full_distances, verbose=True)
         th_no, _ = estimate_threshold_from_data(results_no, full_distances, verbose=True)
@@ -819,8 +1036,19 @@ if __name__ == "__main__":
             results_no, _ = load_results(os.path.join(delta_dir, "results_no_erasure.json"))
             code_distances = sorted(results_era.keys())
 
+            # Crossing method
+            print(f"\n>>> Threshold (crossing method):")
             th_era, _ = estimate_threshold_from_data(results_era, code_distances, verbose=True)
             th_no, _ = estimate_threshold_from_data(results_no, code_distances, verbose=True)
+
+            # Fitting method (ThresholdAnalyzer style)
+            print(f"\n>>> Threshold (fitting method):")
+            th_era_fit, th_era_fit_err = fit_threshold_from_results(results_era, code_distances)
+            th_no_fit, th_no_fit_err = fit_threshold_from_results(results_no, code_distances)
+            if th_era_fit is not None:
+                print(f"  Erasure:    {th_era_fit*100:.3f}% ± {th_era_fit_err*100:.3f}%")
+            if th_no_fit is not None:
+                print(f"  No-erasure: {th_no_fit*100:.3f}% ± {th_no_fit_err*100:.3f}%")
 
             plot_path = args.output or os.path.join(delta_dir, f"threshold_delta{delta_tag}.pdf")
             plot_single_delta(results_era, results_no, code_distances,
