@@ -39,31 +39,36 @@ from utils import find_crossing_point, estimate_threshold_from_data, merge_resul
 
 # ============== 시뮬레이션 함수 정의 ==============
 
-def create_simulate_func(pl, Re=0):
+def create_simulate_func(pl, Re=0, loss_as_erasure=False):
     """
     특정 measurement error rate와 erasure ratio에 대한 simulate_func 생성
-    
+
     Args:
-        pm: measurement error rate (0 ~ 1)
+        pl: ancilla loss probability per round (1 - survival probability)
         Re: erasure ratio - gate error 중 erasure로 변환되는 비율 (0 ~ 1)
-    
+        loss_as_erasure: True이면 loss를 erasure로 처리 (decoder에 힌트 제공),
+                         False(default)이면 진짜 loss로 처리 (random Pauli, 힌트 없음)
+
     Returns:
         ThresholdAnalyzer에서 사용할 simulate_func
     """
-    
+
     def simulate_func(p_total, d, runtime_budget, p_graph=None):
         min_error_cases, time_budget = runtime_budget
         noisy_measurements = d
-        
+
         # p_total을 Pauli와 erasure로 분리
         p_pauli = p_total * (1 - Re)
         p_erasure = p_total * Re
-        
-        # noise model configuration with measurement error
+
+        # noise model configuration with ancilla loss
+        # ancilla_loss_as_erasure=False (default): true loss — decoder gets no hint
+        # ancilla_loss_as_erasure=True:            erasure treatment — decoder reweights edges
         config = {
             "use_correlated_pauli": True,
             "use_correlated_erasure": True,
             "ancilla_loss_probability": pl,
+            "ancilla_loss_as_erasure": loss_as_erasure,
         }
         
         parameters = [
@@ -98,7 +103,8 @@ def create_simulate_func(pl, Re=0):
         pL = float(lst[5])
         pL_dev = float(lst[7])
         
-        print(f"  [pl={pl}, Re={Re}] d={d:2d}, p={p_total:.4e}: pL={pL:.4e} ± {pL_dev:.2e}")
+        mode_str = "erasure" if loss_as_erasure else "loss"
+        print(f"  [pl={pl}, Re={Re}, {mode_str}] d={d:2d}, p={p_total:.4e}: pL={pL:.4e} ± {pL_dev:.2e}")
         return (pL, pL_dev)
     
     return simulate_func
@@ -108,19 +114,20 @@ def create_simulate_func(pl, Re=0):
 
 def run_threshold_analysis(pl, Re, code_distances, rough_code_distances,
                            rough_runtime_budget, runtime_budget,
-                           save_image=None, verbose=True):
+                           save_image=None, verbose=True, loss_as_erasure=False):
     """
     ThresholdAnalyzer를 사용하여 특정 pl과 Re에 대한 threshold 분석
-    
+
     Returns:
         (threshold, threshold_error, collected_data)
     """
+    mode_str = "erasure" if loss_as_erasure else "loss"
     print("\n" + "="*70)
-    print(f" Threshold Analysis for pl = {pl}, Re = {Re}")
+    print(f" Threshold Analysis for pl = {pl}, Re = {Re}, mode = {mode_str}")
     print("="*70)
     _ta_start = time.time()
-    
-    simulate_func = create_simulate_func(pl, Re)
+
+    simulate_func = create_simulate_func(pl, Re, loss_as_erasure=loss_as_erasure)
     
     analyzer = ThresholdAnalyzer(
         code_distances=code_distances,
@@ -201,10 +208,10 @@ def extract_plot_data(collected_data_list, code_distances):
     return results
 
 
-def run_p_sweep(pl, Re, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None):
+def run_p_sweep(pl, Re, code_distances, p_list, runtime_budget, n_workers=1, checkpoint_path=None, loss_as_erasure=False):
     """
     고정된 p 값들에 대해 시뮬레이션 수행 (넓은 범위 데이터 수집용)
-    
+
     Args:
         pl: ancilla loss probability
         Re: erasure ratio
@@ -213,15 +220,17 @@ def run_p_sweep(pl, Re, code_distances, p_list, runtime_budget, n_workers=1, che
         runtime_budget: (min_error_cases, time_budget)
         n_workers: 병렬 워커 수 (1 = 순차 실행)
         checkpoint_path: checkpoint 파일 경로 (중간 저장/이어하기)
-    
+        loss_as_erasure: True이면 loss를 erasure로 처리
+
     Returns:
         {d: {"p": [...], "pL": [...], "pL_dev": [...]}}
     """
-    print(f"\n>>> Running p-sweep for pl={pl}, Re={Re}")
+    mode_str = "erasure" if loss_as_erasure else "loss"
+    print(f"\n>>> Running p-sweep for pl={pl}, Re={Re}, mode={mode_str}")
     print(f"    p values: {[f'{p:.4f}' for p in p_list]}")
     print(f"    code distances: {code_distances}")
-    
-    simulate_func = create_simulate_func(pl, Re)
+
+    simulate_func = create_simulate_func(pl, Re, loss_as_erasure=loss_as_erasure)
 
     return run_p_sweep_with_checkpoint(
         simulate_func, code_distances, p_list, runtime_budget,
@@ -382,6 +391,8 @@ if __name__ == "__main__":
                         help='Number of parallel workers (0 = all cores, 1 = sequential)')
     parser.add_argument('--fresh', action='store_true',
                         help='Delete existing checkpoints and start from scratch')
+    parser.add_argument('--loss-as-erasure', action='store_true', default=False,
+                        help='Treat ancilla loss as erasure (decoder gets hint). Default: true loss (no hint)')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
     
@@ -400,7 +411,8 @@ if __name__ == "__main__":
         args.output = os.path.join(args.data_dir, args.output)
     compile_code_if_necessary()
     
-    print(f"\n>>> Configuration: Re={args.Re}, data_dir={args.data_dir}")
+    loss_mode_str = "erasure" if args.loss_as_erasure else "loss"
+    print(f"\n>>> Configuration: Re={args.Re}, loss_mode={loss_mode_str}, data_dir={args.data_dir}")
     
     if args.mode == 'quick':
         # 빠른 테스트 (~15-30분)
@@ -421,8 +433,9 @@ if __name__ == "__main__":
         print(f"\n>>> pl=0.00076, Re={args.Re}: p sweep from {p_list_pl0[0]:.1e} to {p_list_pl0[-1]:.1e} ({len(p_list_pl0)} points)")
         results_pl0_sweep = run_p_sweep(0.00076, args.Re, code_distances, p_list_pl0.tolist(), sweep_runtime_budget,
                                         n_workers=args.parallel,
-                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_sweep.json"))
-        
+                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_sweep.json"),
+                                        loss_as_erasure=args.loss_as_erasure)
+
         # ThresholdAnalyzer로 정밀 threshold 추정
         th_pl0, th_pl0_err, data_pl0 = run_threshold_analysis(
             pl=0.00076,
@@ -431,31 +444,34 @@ if __name__ == "__main__":
             rough_code_distances=rough_code_distances,
             rough_runtime_budget=rough_runtime_budget,
             runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl0.pdf")
+            save_image=os.path.join(args.data_dir, "threshold_pl0.pdf"),
+            loss_as_erasure=args.loss_as_erasure,
         )
         results_pl0_th = extract_plot_data(data_pl0, code_distances)
-        
+
         # 병합 및 저장
         results_pl0 = merge_results(results_pl0_sweep, results_pl0_th)
         save_results(results_pl0, th_pl0, os.path.join(args.data_dir, "results_pl0.json"))
-        
+
         # ========== pl = 0.0019 (0.19% measurement loss) ==========
         # p_list_pm002 = p_sweep_all[p_sweep_all <= 0.02]
         p_list_pl002 = p_sweep_all
         print(f"\n>>> pl=0.0019, Re={args.Re}: p sweep from {p_list_pl002[0]:.1e} to {p_list_pl002[-1]:.1e} ({len(p_list_pl002)} points)")
         results_pl002_sweep = run_p_sweep(0.0019, args.Re, code_distances, p_list_pl002.tolist(), sweep_runtime_budget,
                                           n_workers=args.parallel,
-                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_sweep.json"))
-        
+                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_sweep.json"),
+                                          loss_as_erasure=args.loss_as_erasure)
+
         # ThresholdAnalyzer로 정밀 threshold 추정
         th_pl002, th_pl002_err, data_pl002 = run_threshold_analysis(
-            pl=0.0019,
+            pl=0.0038,
             Re=args.Re,
             code_distances=code_distances,
             rough_code_distances=rough_code_distances,
             rough_runtime_budget=rough_runtime_budget,
             runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl002.pdf")
+            save_image=os.path.join(args.data_dir, "threshold_pl002.pdf"),
+            loss_as_erasure=args.loss_as_erasure,
         )
         results_pl002_th = extract_plot_data(data_pl002, code_distances)
         
@@ -487,8 +503,9 @@ if __name__ == "__main__":
         print(f"\n>>> pl=0.00076, Re={args.Re}: p sweep from {p_list_pl0[0]:.1e} to {p_list_pl0[-1]:.1e} ({len(p_list_pl0)} points)")
         results_pl0_sweep = run_p_sweep(0.00076, args.Re, code_distances, p_list_pl0.tolist(), sweep_runtime_budget,
                                         n_workers=args.parallel,
-                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_full_sweep.json"))
-        
+                                        checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl0_full_sweep.json"),
+                                        loss_as_erasure=args.loss_as_erasure)
+
         th_pl0, th_pl0_err, data_pl0 = run_threshold_analysis(
             pl=0.00076,
             Re=args.Re,
@@ -496,20 +513,22 @@ if __name__ == "__main__":
             rough_code_distances=rough_code_distances,
             rough_runtime_budget=rough_runtime_budget,
             runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl0_full.pdf")
+            save_image=os.path.join(args.data_dir, "threshold_pl0_full.pdf"),
+            loss_as_erasure=args.loss_as_erasure,
         )
         results_pl0_th = extract_plot_data(data_pl0, code_distances)
-        
+
         results_pl0 = merge_results(results_pl0_sweep, results_pl0_th)
         save_results(results_pl0, th_pl0, os.path.join(args.data_dir, "results_pl0_full.json"))
-        
+
         # ========== pl = 0.0019 ==========
         p_list_pl002 = p_sweep_all[p_sweep_all <= 0.03]
         print(f"\n>>> pl=0.0019, Re={args.Re}: p sweep from {p_list_pl002[0]:.1e} to {p_list_pl002[-1]:.1e} ({len(p_list_pl002)} points)")
         results_pl002_sweep = run_p_sweep(0.0019, args.Re, code_distances, p_list_pl002.tolist(), sweep_runtime_budget,
                                           n_workers=args.parallel,
-                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_full_sweep.json"))
-        
+                                          checkpoint_path=os.path.join(args.data_dir, "checkpoint_pl002_full_sweep.json"),
+                                          loss_as_erasure=args.loss_as_erasure)
+
         th_pl002, th_pl002_err, data_pl002 = run_threshold_analysis(
             pl=0.0019,
             Re=args.Re,
@@ -517,7 +536,8 @@ if __name__ == "__main__":
             rough_code_distances=rough_code_distances,
             rough_runtime_budget=rough_runtime_budget,
             runtime_budget=runtime_budget,
-            save_image=os.path.join(args.data_dir, "threshold_pl002_full.pdf")
+            save_image=os.path.join(args.data_dir, "threshold_pl002_full.pdf"),
+            loss_as_erasure=args.loss_as_erasure,
         )
         results_pl002_th = extract_plot_data(data_pl002, code_distances)
         

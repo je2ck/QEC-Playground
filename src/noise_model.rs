@@ -23,9 +23,13 @@ pub struct NoiseModel {
     pub additional_noise: Vec<AdditionalNoise>,
     /// Ancilla loss probability per round (1 - survival probability)
     /// Once an ancilla is lost, it stays lost for all subsequent rounds
-    /// Lost ancilla measurements are treated as erasures
     #[serde(default)]
     pub ancilla_loss_probability: f64,
+    /// How to treat ancilla loss:
+    /// - false (default): true loss — random Pauli applied, no erasure flag; decoder gets no hint
+    /// - true: erasure treatment — has_erasure = true; decoder knows and can reweight edges
+    #[serde(default)]
+    pub ancilla_loss_as_erasure: bool,
     /// Number of measurement cycles (for ancilla loss model)
     #[serde(default = "default_measurement_cycles")]
     pub measurement_cycles: usize,
@@ -176,6 +180,7 @@ impl NoiseModel {
                 .collect(),
             additional_noise: vec![],
             ancilla_loss_probability: 0.,
+            ancilla_loss_as_erasure: false,
             measurement_cycles: simulator.measurement_cycles,
         }
     }

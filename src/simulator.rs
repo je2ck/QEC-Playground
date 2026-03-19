@@ -924,13 +924,27 @@ impl SimulatorGenerics for Simulator {
                 pending_erasure_errors.push((position.clone(), 1.0, None));
             }
 
-            // Ancilla loss model: mark lost ancilla measurements as erasures
+            // Ancilla loss model
             if ancilla_loss_prob > 0. && measurement_cycles > 0 && node.qubit_type != QubitType::Data {
                 if let Some(&loss_round) = ancilla_lost.get(&(position.i, position.j)) {
                     let current_round = position.t / measurement_cycles;
-                    // Only mark erasure at measurement layers
+                    // Only act at measurement layers
                     if current_round >= loss_round && position.t % measurement_cycles == 0 {
-                        pending_erasure_errors.push((position.clone(), 1.0, None));
+                        if noise_model.ancilla_loss_as_erasure {
+                            // Erasure mode: decoder gets has_erasure flag and can reweight edges
+                            pending_erasure_errors.push((position.clone(), 1.0, None));
+                        } else {
+                            // True loss mode (default): random Pauli applied, no erasure flag
+                            // → decoder sees a potentially wrong syndrome bit with no hint
+                            let r = rng.next_f64();
+                            let loss_pauli = if r < 0.25 { X }
+                                       else if r < 0.5  { Z }
+                                       else if r < 0.75 { Y }
+                                       else             { I };
+                            if loss_pauli != I {
+                                pending_pauli_errors.push((position.clone(), loss_pauli));
+                            }
+                        }
                     }
                 }
             }

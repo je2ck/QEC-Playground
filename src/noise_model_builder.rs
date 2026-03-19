@@ -613,8 +613,8 @@ impl NoiseModelBuilder {
                 // Ancilla loss model:
                 //   ancilla_loss_probability = 1 - Ps (probability of losing ancilla each round)
                 //   Once lost, ancilla stays lost for all subsequent rounds
-                //   Lost ancilla measurements are treated as erasures
                 let mut ancilla_loss_probability = 0.; // 1 - Ps (per round)
+                let mut ancilla_loss_as_erasure = false; // default: true loss (no erasure flag)
                 let mut config_cloned = noise_model_configuration.clone();
                 let config = config_cloned
                     .as_object_mut()
@@ -652,10 +652,11 @@ impl NoiseModelBuilder {
                     erasure_delay_cycle = value.as_u64().expect("u64") as usize;
                 }
                 if let Some(value) = config.remove("ancilla_loss_probability") {
-                    // Probability of losing an ancilla qubit each round (1 - survival probability)
-                    // Once lost, the ancilla stays lost for all subsequent rounds
-                    // Lost ancilla measurements are marked as erasures
                     ancilla_loss_probability = value.as_f64().expect("f64");
+                }
+                if let Some(value) = config.remove("ancilla_loss_as_erasure") {
+                    // true: decoder gets erasure flag (advantage); false (default): true loss, no hint
+                    ancilla_loss_as_erasure = value.as_bool().expect("bool");
                 }
                 if !config.is_empty() {
                     panic!("unknown keys: {:?}", config.keys().collect::<Vec<&String>>());
@@ -926,8 +927,9 @@ impl NoiseModelBuilder {
                         }
                     }
                 });
-                // Set ancilla loss probability in noise model for use during simulation
+                // Set ancilla loss parameters in noise model for use during simulation
                 noise_model.ancilla_loss_probability = ancilla_loss_probability;
+                noise_model.ancilla_loss_as_erasure = ancilla_loss_as_erasure;
                 noise_model.measurement_cycles = simulator.measurement_cycles;
             }
             Self::StimNoiseModel => {
