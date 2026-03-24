@@ -397,6 +397,8 @@ def plot_rounds_comparison(all_results, code_distances, p_gate, delta,
             data = all_results[scenario][d]
             T_arr = np.array(data["T"], dtype=float)
             pL_arr = np.array(data["pL"])
+            order = np.argsort(T_arr)
+            T_arr, pL_arr = T_arr[order], pL_arr[order]
 
             valid = (pL_arr > 0) & (pL_arr < 1) & (T_arr > 0)
             if not np.any(valid):

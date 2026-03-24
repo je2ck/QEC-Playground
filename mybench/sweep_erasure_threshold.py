@@ -497,6 +497,8 @@ def plot_single_delta(results_erasure, results_no_erasure, code_distances,
         if d in results_no_erasure and len(results_no_erasure[d]["p"]) > 0:
             p_arr = np.array(results_no_erasure[d]["p"])
             pL_arr = np.array(results_no_erasure[d]["pL"])
+            order = np.argsort(p_arr)
+            p_arr, pL_arr = p_arr[order], pL_arr[order]
             valid = pL_arr > 0
             ax.plot(p_arr[valid], pL_arr[valid],
                     'o--', color=clr,
@@ -506,6 +508,8 @@ def plot_single_delta(results_erasure, results_no_erasure, code_distances,
         if d in results_erasure and len(results_erasure[d]["p"]) > 0:
             p_arr = np.array(results_erasure[d]["p"])
             pL_arr = np.array(results_erasure[d]["pL"])
+            order = np.argsort(p_arr)
+            p_arr, pL_arr = p_arr[order], pL_arr[order]
             valid = pL_arr > 0
             ax.plot(p_arr[valid], pL_arr[valid],
                     'o-', color=clr, markersize=6, linewidth=1.5,

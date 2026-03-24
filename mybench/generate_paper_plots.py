@@ -84,9 +84,9 @@ CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
 DELTA_2D = 0.475
 DELTA_1D_DEFAULT = 0.53852309
 
-CODE_DISTANCES_QUICK = [3, 5, 7]
+CODE_DISTANCES_QUICK = [3, 5, 7, 9]       # d=9 needed for threshold estimation
 CODE_DISTANCES_FULL = [3, 5, 7, 9, 11, 13]
-# For threshold estimation, use higher distances
+# For threshold estimation, use higher distances (must be subset of CODE_DISTANCES)
 CODE_DISTANCES_THRESHOLD_QUICK = [5, 7, 9]
 CODE_DISTANCES_THRESHOLD_FULL = [5, 7, 9, 11, 13]
 
@@ -132,6 +132,8 @@ def plot_threshold_comparison(results_a, results_b, code_distances,
         if d in results_a and len(results_a[d]["p"]) > 0:
             p_arr = np.array(results_a[d]["p"])
             pL_arr = np.array(results_a[d]["pL"])
+            order = np.argsort(p_arr)
+            p_arr, pL_arr = p_arr[order], pL_arr[order]
             valid = pL_arr > 0
             ax.plot(p_arr[valid], pL_arr[valid],
                     'o--', color=clr, markerfacecolor='white',
@@ -141,6 +143,8 @@ def plot_threshold_comparison(results_a, results_b, code_distances,
         if d in results_b and len(results_b[d]["p"]) > 0:
             p_arr = np.array(results_b[d]["p"])
             pL_arr = np.array(results_b[d]["pL"])
+            order = np.argsort(p_arr)
+            p_arr, pL_arr = p_arr[order], pL_arr[order]
             valid = pL_arr > 0
             ax.plot(p_arr[valid], pL_arr[valid],
                     'o-', color=clr, markersize=6, linewidth=1.5,
@@ -167,9 +171,20 @@ def plot_threshold_comparison(results_a, results_b, code_distances,
                 f'$p_{{th}}={th_b*100:.2f}\\%$\n({label_b})',
                 fontsize=8, color='blue')
 
+    legend_lines = []
+    legend_lines.append(f'{label_a}  (dashed, open)')
+    if th_a is not None:
+        legend_lines[-1] += f'  $p_{{th}}={th_a*100:.2f}\\%$'
+    else:
+        legend_lines[-1] += '  (no threshold)'
+    legend_lines.append(f'{label_b}  (solid, filled)')
+    if th_b is not None:
+        legend_lines[-1] += f'  $p_{{th}}={th_b*100:.2f}\\%$'
+    else:
+        legend_lines[-1] += '  (no threshold)'
+
     ax.text(0.02, 0.18,
-            f'{label_a}  (dashed, open)\n'
-            f'{label_b}  (solid, filled)',
+            '\n'.join(legend_lines),
             transform=ax.transAxes, fontsize=10, verticalalignment='top')
 
     if title:
@@ -205,6 +220,8 @@ def plot_three_scenarios(results_dict, code_distances,
                 continue
             p_arr = np.array(results[d]["p"])
             pL_arr = np.array(results[d]["pL"])
+            order = np.argsort(p_arr)
+            p_arr, pL_arr = p_arr[order], pL_arr[order]
             valid = pL_arr > 0
             mfc = clr if fill else 'white'
             ax.plot(p_arr[valid], pL_arr[valid],
@@ -267,6 +284,8 @@ def plot_rounds(all_results, code_distances, p_gate,
             data = all_results[sc][d]
             T_arr = np.array(data["T"], dtype=float)
             pL_arr = np.array(data["pL"])
+            order = np.argsort(T_arr)
+            T_arr, pL_arr = T_arr[order], pL_arr[order]
             valid = (pL_arr > 0) & (pL_arr < 1) & (T_arr > 0)
             if not np.any(valid):
                 continue

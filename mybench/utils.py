@@ -775,7 +775,12 @@ def plot_lambda_comparison(lambda_datasets, code_distances,
             ld = lam_data[pair_key]
             if not ld["p"]:
                 continue
-            ax.errorbar(ld["p"], ld["lambda"], yerr=ld["lambda_err"],
+            p_arr = np.array(ld["p"])
+            lam_arr = np.array(ld["lambda"])
+            lam_err_arr = np.array(ld["lambda_err"])
+            order = np.argsort(p_arr)
+            p_arr, lam_arr, lam_err_arr = p_arr[order], lam_arr[order], lam_err_arr[order]
+            ax.errorbar(p_arr, lam_arr, yerr=lam_err_arr,
                         fmt=marker, linestyle=ls, color=color,
                         markersize=5, linewidth=1.5,
                         label=label, capsize=3,
