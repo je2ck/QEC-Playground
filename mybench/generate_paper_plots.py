@@ -82,7 +82,7 @@ ATOM_LOSS = 0.00019 * 5  # 0.00095
 CSV_2D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_unsup_sweep_2d.csv")
 CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
 DELTA_2D = 0.475
-DELTA_1D = 0.50005716
+DELTA_1D_DEFAULT = 0.53852309
 
 CODE_DISTANCES_QUICK = [3, 5, 7]
 CODE_DISTANCES_FULL = [3, 5, 7, 9, 11, 13]
@@ -371,7 +371,7 @@ def do_plot1(output_dir, code_distances, code_distances_th,
     print(f"  Plot 1: Raw vs Erasure(2d) threshold (no loss)")
     print(f"{'='*70}")
 
-    data_dir = ensure_dir(os.path.join(output_dir, "plot1_data"))
+    data_dir = ensure_dir(os.path.join(output_dir, "plot1"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
     ratio = Rm / Rc if Rc > 0 else float('inf')
     print(f"  Pm_raw={PM_RAW:.6f}, Pm_den={PM_DEN:.6f}")
@@ -416,21 +416,21 @@ def do_plot1(output_dir, code_distances, code_distances_th,
         results_raw, results_era, code_distances,
         "Raw", "Erasure (2D)", th_raw, th_era,
         title=f"Raw (Pm={PM_RAW:.4f}) vs Erasure-2D (Pm={PM_DEN:.4f}, delta={delta:.3f})",
-        save_path=os.path.join(output_dir, "plot1_threshold_raw_vs_erasure2d.pdf"),
+        save_path=os.path.join(data_dir, "plot1_threshold_raw_vs_erasure2d.pdf"),
     )
     return results_raw, results_era
 
 
 def do_plot2(output_dir, code_distances, code_distances_th,
-             runtime_budget, n_workers, mode):
+             runtime_budget, n_workers, mode, delta_1d=DELTA_1D_DEFAULT):
     """Plot 2: Den vs Erasure(1d) vs Erasure(2d), no loss."""
     print(f"\n{'='*70}")
     print(f"  Plot 2: Den vs Erasure(1d) vs Erasure(2d) (no loss)")
     print(f"{'='*70}")
 
-    data_dir = ensure_dir(os.path.join(output_dir, "plot2_data"))
+    data_dir = ensure_dir(os.path.join(output_dir, "plot2"))
     Rm_2d, Rc_2d, delta_2d = get_erasure_params(CSV_2D, DELTA_2D)
-    Rm_1d, Rc_1d, delta_1d = get_erasure_params(CSV_1D, DELTA_1D)
+    Rm_1d, Rc_1d, delta_1d = get_erasure_params(CSV_1D, delta_1d)
     print(f"  Pm_den={PM_DEN:.6f}")
     print(f"  2D: Rm={Rm_2d:.6f}, Rc={Rc_2d:.8f}, delta={delta_2d:.3f}")
     print(f"  1D: Rm={Rm_1d:.6f}, Rc={Rc_1d:.8f}, delta={delta_1d:.5f}")
@@ -482,7 +482,7 @@ def do_plot2(output_dir, code_distances, code_distances_th,
         },
         code_distances,
         title=f"Erasure Effect Comparison (Pm_den={PM_DEN:.4f})",
-        save_path=os.path.join(output_dir, "plot2_erasure_comparison.pdf"),
+        save_path=os.path.join(data_dir, "plot2_erasure_comparison.pdf"),
     )
 
 
@@ -493,7 +493,7 @@ def do_plot3(output_dir, code_distances, code_distances_th,
     print(f"  Plot 3: Raw vs Erasure(2d) threshold (realistic loss)")
     print(f"{'='*70}")
 
-    data_dir = ensure_dir(os.path.join(output_dir, "plot3_data"))
+    data_dir = ensure_dir(os.path.join(output_dir, "plot3"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
     print(f"  Pm_raw={PM_RAW:.6f}, Pm_den={PM_DEN:.6f}, atom_loss={ATOM_LOSS:.5f}")
 
@@ -536,21 +536,21 @@ def do_plot3(output_dir, code_distances, code_distances_th,
         results_raw, results_era, code_distances,
         "Raw", "Erasure (2D)", th_raw, th_era,
         title=f"Raw vs Erasure-2D (realistic loss, pl={ATOM_LOSS:.5f})",
-        save_path=os.path.join(output_dir, "plot3_threshold_with_loss.pdf"),
+        save_path=os.path.join(data_dir, "plot3_threshold_with_loss.pdf"),
     )
     return results_raw, results_era
 
 
 def do_plot4(output_dir, code_distances, code_distances_th,
-             runtime_budget, n_workers, mode):
+             runtime_budget, n_workers, mode, delta_1d=DELTA_1D_DEFAULT):
     """Plot 4: Den vs Erasure(1d) vs Erasure(2d), realistic loss."""
     print(f"\n{'='*70}")
     print(f"  Plot 4: Den vs Erasure(1d) vs Erasure(2d) (realistic loss)")
     print(f"{'='*70}")
 
-    data_dir = ensure_dir(os.path.join(output_dir, "plot4_data"))
+    data_dir = ensure_dir(os.path.join(output_dir, "plot4"))
     Rm_2d, Rc_2d, delta_2d = get_erasure_params(CSV_2D, DELTA_2D)
-    Rm_1d, Rc_1d, delta_1d = get_erasure_params(CSV_1D, DELTA_1D)
+    Rm_1d, Rc_1d, delta_1d = get_erasure_params(CSV_1D, delta_1d)
     print(f"  Pm_den={PM_DEN:.6f}, atom_loss={ATOM_LOSS:.5f}")
 
     p_list = p_list_range(-3, -2, 20 if mode == 'full' else 12)
@@ -600,7 +600,7 @@ def do_plot4(output_dir, code_distances, code_distances_th,
         },
         code_distances,
         title=f"Erasure Comparison (realistic loss, pl={ATOM_LOSS:.5f})",
-        save_path=os.path.join(output_dir, "plot4_erasure_comparison_with_loss.pdf"),
+        save_path=os.path.join(data_dir, "plot4_erasure_comparison_with_loss.pdf"),
     )
 
 
@@ -611,7 +611,7 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
     print(f"  Plot 5: Rounds comparison (realistic loss)")
     print(f"{'='*70}")
 
-    data_dir = ensure_dir(os.path.join(output_dir, "plot5_data"))
+    data_dir = ensure_dir(os.path.join(output_dir, "plot5"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
     print(f"  p_gate={p_gate:.2e}, pl={ATOM_LOSS:.5f}, max_rounds={max_rounds}")
 
@@ -661,7 +661,7 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
         all_results, code_distances, p_gate,
         PM_RAW, PM_DEN, Rm, Rc, delta,
         ATOM_LOSS, ATOM_LOSS,
-        save_path=os.path.join(output_dir, "plot5_rounds_comparison.pdf"),
+        save_path=os.path.join(data_dir, "plot5_rounds_comparison.pdf"),
     )
 
 
@@ -673,7 +673,7 @@ def do_plot6(output_dir, code_distances, code_distances_th,
     print(f"  Plot 6: Lambda suppression (no loss + realistic loss)")
     print(f"{'='*70}")
 
-    data_dir = ensure_dir(os.path.join(output_dir, "plot6_data"))
+    data_dir = ensure_dir(os.path.join(output_dir, "plot6"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
 
     p_list = p_list_range(-4, -1, 20 if mode == 'full' else 12)
@@ -701,8 +701,8 @@ def do_plot6(output_dir, code_distances, code_distances_th,
             label, sim_func, code_distances, p_list, runtime_budget,
             os.path.join(data_dir, f"ckpt_{ckpt_suffix}.json"), n_workers)
 
-    plot1_file = os.path.join(output_dir, "plot1_data", "results.json")
-    plot3_file = os.path.join(output_dir, "plot3_data", "results.json")
+    plot1_file = os.path.join(output_dir, "plot1", "results.json")
+    plot3_file = os.path.join(output_dir, "plot3", "results.json")
 
     # --- No loss ---
     p1_raw = plot1_results[0] if plot1_results else None
@@ -783,7 +783,7 @@ def do_plot6(output_dir, code_distances, code_distances_th,
     plot_lambda(
         datasets, code_distances_th,
         title=f"Lambda Suppression: Raw vs Erasure-2D (no loss & realistic loss)",
-        save_path=os.path.join(output_dir, "plot6_lambda_suppression.pdf"),
+        save_path=os.path.join(data_dir, "plot6_lambda_suppression.pdf"),
     )
 
 
@@ -803,6 +803,8 @@ if __name__ == "__main__":
                         help='Gate error rate for plot 5 (default: 0.0005)')
     parser.add_argument('--max-rounds', type=int, default=100,
                         help='Max measurement rounds for plot 5 (default: 100)')
+    parser.add_argument('--delta-1d', type=float, default=DELTA_1D_DEFAULT,
+                        help=f'Delta for 1D erasure (default: {DELTA_1D_DEFAULT})')
     args = parser.parse_args()
 
     n_workers = resolve_parallel_workers(args.parallel)
@@ -859,7 +861,8 @@ if __name__ == "__main__":
 
     if 2 in plots_to_run:
         do_plot2(output_dir, code_distances, code_distances_th,
-                 runtime_budget, n_workers, args.mode)
+                 runtime_budget, n_workers, args.mode,
+                 delta_1d=args.delta_1d)
 
     if 3 in plots_to_run:
         ret = do_plot3(output_dir, code_distances, code_distances_th,
@@ -869,7 +872,8 @@ if __name__ == "__main__":
 
     if 4 in plots_to_run:
         do_plot4(output_dir, code_distances, code_distances_th,
-                 runtime_budget, n_workers, args.mode)
+                 runtime_budget, n_workers, args.mode,
+                 delta_1d=args.delta_1d)
 
     if 5 in plots_to_run:
         do_plot5(output_dir, code_distances, runtime_budget, n_workers,
