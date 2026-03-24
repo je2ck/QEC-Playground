@@ -40,7 +40,7 @@ qec_playground_root_dir = subprocess.run(
 ).stdout.decode(sys.stdout.encoding).strip(" \r\n")
 sys.path.insert(0, os.path.join(qec_playground_root_dir, "benchmark", "threshold_analyzer"))
 
-from threshold_analyzer import compile_code_if_necessary
+from threshold_analyzer import compile_code_if_necessary, ThresholdAnalyzer
 
 from sweep_erasure_threshold import (
     parse_sweep_csv,
@@ -84,14 +84,16 @@ CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
 DELTA_2D = 0.475
 DELTA_1D_DEFAULT = 0.15386374
 
-CODE_DISTANCES_QUICK = [3, 5, 7, 9]       # d=9 needed for threshold estimation
+CODE_DISTANCES_QUICK = [3, 5, 7, 9, 11]
 CODE_DISTANCES_FULL = [3, 5, 7, 9, 11, 13]
-# For threshold estimation, use higher distances (must be subset of CODE_DISTANCES)
-CODE_DISTANCES_THRESHOLD_QUICK = [5, 7, 9]
-CODE_DISTANCES_THRESHOLD_FULL = [5, 7, 9, 11, 13]
+# For threshold estimation: always use 5,7,9,11
+CODE_DISTANCES_THRESHOLD = [5, 7, 9, 11]
 
 RUNTIME_QUICK = (200, 60)
 RUNTIME_FULL = (40000, 3600)
+# Rough estimate uses fewer error cases and shorter time budget
+RUNTIME_ROUGH_QUICK = (100, 30)
+RUNTIME_ROUGH_FULL = (2000, 300)
 
 ALL_PLOTS = [1, 2, 3, 4, 5, 6]
 
@@ -109,6 +111,59 @@ def get_erasure_params(csv_path, delta):
 def p_list_range(log_min, log_max, n_points):
     """Generate log-spaced p values."""
     return list(np.logspace(log_min, log_max, n_points))
+
+
+def find_threshold_analyzer(simulate_func, code_distances, rough_runtime_budget,
+                             runtime_budget, label="", rough_init_p=0.05):
+    """
+    ThresholdAnalyzer를 사용해 rough → precise threshold 추정.
+    threshold_vs_measurement_error.py 방식 참고.
+
+    Returns:
+        threshold, threshold_err (None, None if failed)
+    """
+    rough_code_distances = [code_distances[0], code_distances[-1]]
+
+    analyzer = ThresholdAnalyzer(
+        code_distances=code_distances,
+        simulate_func=simulate_func,
+        default_rough_runtime_budget=rough_runtime_budget,
+        default_runtime_budget=runtime_budget,
+    )
+    analyzer.rough_code_distances = rough_code_distances
+    analyzer.rough_runtime_budgets = [rough_runtime_budget] * len(rough_code_distances)
+    analyzer.verbose = True
+    analyzer.rough_init_search_start_p = rough_init_p
+
+    try:
+        rough_popt, rough_perr = analyzer.rough_estimate()
+        rough_th = rough_popt[3]
+        print(f"  [{label}] Rough threshold: {rough_th:.6f} ({rough_th*100:.3f}%)")
+
+        popt, perr = analyzer.precise_estimate(rough_popt)
+        threshold = popt[3]
+        threshold_err = perr[3]
+
+        # Retry if error is too large
+        if threshold_err / threshold > 0.01:
+            print(f"  [{label}] Error too large ({threshold_err/threshold:.1%}), retrying...")
+            popt, perr = analyzer.precise_estimate(popt)
+            threshold = popt[3]
+            threshold_err = perr[3]
+
+        print(f"  [{label}] Threshold: {threshold:.6f} ({threshold*100:.3f}%) +/- {threshold_err:.6f}")
+        return threshold, threshold_err
+
+    except Exception as e:
+        print(f"  [{label}] ThresholdAnalyzer failed: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to crossing-based method
+        print(f"  [{label}] Falling back to crossing-based estimate...")
+        th, th_err = estimate_threshold_from_data(
+            analyzer.results if hasattr(analyzer, 'results') else {},
+            code_distances, verbose=True)
+        return th, th_err
 
 
 def ensure_dir(path):
@@ -396,7 +451,7 @@ def run_rounds(label, p_gate, code_distances, rounds_list,
 # ============== Plot Implementations ==============
 
 def do_plot1(output_dir, code_distances, code_distances_th,
-             runtime_budget, n_workers, mode):
+             runtime_budget, n_workers, mode, rough_runtime_budget=None):
     """Plot 1: Raw vs Erasure(2d) threshold, no loss."""
     print(f"\n{'='*70}")
     print(f"  Plot 1: Raw vs Erasure(2d) threshold (no loss)")
@@ -432,8 +487,12 @@ def do_plot1(output_dir, code_distances, code_distances_th,
             "Erasure(2d)", sim_era, code_distances, p_list, runtime_budget,
             os.path.join(data_dir, "ckpt_erasure.json"), n_workers)
 
-        th_raw, _ = estimate_threshold_from_data(results_raw, code_distances_th, verbose=True)
-        th_era, _ = estimate_threshold_from_data(results_era, code_distances_th, verbose=True)
+        # Threshold estimation: rough → precise via ThresholdAnalyzer
+        rough_budget = rough_runtime_budget or runtime_budget
+        th_raw, _ = find_threshold_analyzer(
+            sim_raw, code_distances_th, rough_budget, runtime_budget, label="Raw")
+        th_era, _ = find_threshold_analyzer(
+            sim_era, code_distances_th, rough_budget, runtime_budget, label="Erasure(2d)")
 
         saved = {
             "raw": {str(d): v for d, v in results_raw.items()},
@@ -518,7 +577,7 @@ def do_plot2(output_dir, code_distances, code_distances_th,
 
 
 def do_plot3(output_dir, code_distances, code_distances_th,
-             runtime_budget, n_workers, mode):
+             runtime_budget, n_workers, mode, rough_runtime_budget=None):
     """Plot 3: Raw vs Erasure(2d) threshold, realistic loss."""
     print(f"\n{'='*70}")
     print(f"  Plot 3: Raw vs Erasure(2d) threshold (realistic loss)")
@@ -552,8 +611,12 @@ def do_plot3(output_dir, code_distances, code_distances_th,
             "Erasure(2d)+loss", sim_era, code_distances, p_list, runtime_budget,
             os.path.join(data_dir, "ckpt_erasure.json"), n_workers)
 
-        th_raw, _ = estimate_threshold_from_data(results_raw, code_distances_th, verbose=True)
-        th_era, _ = estimate_threshold_from_data(results_era, code_distances_th, verbose=True)
+        # Threshold estimation: rough → precise via ThresholdAnalyzer
+        rough_budget = rough_runtime_budget or runtime_budget
+        th_raw, _ = find_threshold_analyzer(
+            sim_raw, code_distances_th, rough_budget, runtime_budget, label="Raw+loss")
+        th_era, _ = find_threshold_analyzer(
+            sim_era, code_distances_th, rough_budget, runtime_budget, label="Erasure(2d)+loss")
 
         saved = {
             "raw": {str(d): v for d, v in results_raw.items()},
@@ -855,19 +918,20 @@ if __name__ == "__main__":
                 sys.exit(1)
 
     # Mode-dependent settings
+    code_distances_th = CODE_DISTANCES_THRESHOLD  # always [5, 7, 9, 11]
     if args.mode == 'quick':
         code_distances = CODE_DISTANCES_QUICK
-        code_distances_th = CODE_DISTANCES_THRESHOLD_QUICK
         runtime_budget = RUNTIME_QUICK
+        rough_runtime_budget = RUNTIME_ROUGH_QUICK
     elif args.mode == 'full':
         code_distances = CODE_DISTANCES_FULL
-        code_distances_th = CODE_DISTANCES_THRESHOLD_FULL
         runtime_budget = RUNTIME_FULL
+        rough_runtime_budget = RUNTIME_ROUGH_FULL
     else:
         # plot mode: distances will be inferred from saved data
         code_distances = CODE_DISTANCES_FULL
-        code_distances_th = CODE_DISTANCES_THRESHOLD_FULL
         runtime_budget = None
+        rough_runtime_budget = None
 
     print(f"\n{'#'*70}")
     print(f"  Paper Plot Generator")
@@ -895,7 +959,8 @@ if __name__ == "__main__":
 
     if 1 in plots_to_run:
         ret = do_plot1(output_dir, code_distances, code_distances_th,
-                       runtime_budget, n_workers, args.mode)
+                       runtime_budget, n_workers, args.mode,
+                       rough_runtime_budget=rough_runtime_budget)
         if ret is not None:
             plot1_results = ret
 
@@ -906,7 +971,8 @@ if __name__ == "__main__":
 
     if 3 in plots_to_run:
         ret = do_plot3(output_dir, code_distances, code_distances_th,
-                       runtime_budget, n_workers, args.mode)
+                       runtime_budget, n_workers, args.mode,
+                       rough_runtime_budget=rough_runtime_budget)
         if ret is not None:
             plot3_results = ret
 
