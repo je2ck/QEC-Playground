@@ -80,6 +80,7 @@ PM_RAW = 0.023368
 PM_DEN = 0.009313
 PM_RAW_16MS = 0.0001     # 16ms raw measurement error probability
 ATOM_LOSS = 0.00019 * 5  # 0.00095
+ATOM_LOSS_16MS = 0.00019 * 16  # 0.00304
 
 CSV_2D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_unsup_sweep_2d.csv")
 CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
@@ -722,8 +723,9 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
 
     data_dir = ensure_dir(os.path.join(output_dir, "plot5"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
-    print(f"  Raw(16ms) Pm={PM_RAW_16MS:.4f}, Erasure(5ms) Pm={PM_DEN:.6f}")
-    print(f"  p_gate={p_gate:.2e}, pl={ATOM_LOSS:.5f}, max_rounds={max_rounds}")
+    print(f"  Raw(16ms) Pm={PM_RAW_16MS:.4f}, pl={ATOM_LOSS_16MS:.5f}")
+    print(f"  Erasure(5ms) Pm={PM_DEN:.6f}, pl={ATOM_LOSS:.5f}")
+    print(f"  p_gate={p_gate:.2e}, max_rounds={max_rounds}")
 
     results_file = os.path.join(data_dir, "results.json")
 
@@ -747,7 +749,7 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
         if os.path.exists(results_file):
             all_results, _ = load_rounds_results(results_file)
 
-        noise_raw_16ms = make_noise_config_raw(PM_RAW_16MS, pl=ATOM_LOSS, realistic_loss=True)
+        noise_raw_16ms = make_noise_config_raw(PM_RAW_16MS, pl=ATOM_LOSS_16MS, realistic_loss=True)
         noise_era = make_noise_config_erasure(PM_DEN, Rm, Rc, pl=ATOM_LOSS, realistic_loss=True)
 
         scenarios = [
@@ -763,7 +765,8 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
                 existing_results=existing,
             )
             save_rounds_results(all_results, {
-                "p_gate": p_gate, "pl": ATOM_LOSS,
+                "p_gate": p_gate,
+                "pl_raw_16ms": ATOM_LOSS_16MS, "pl_erasure_5ms": ATOM_LOSS,
                 "pm_raw_16ms": PM_RAW_16MS, "pm_den": PM_DEN,
                 "delta": delta, "max_rounds": max_rounds,
             }, results_file)
@@ -771,7 +774,7 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
     plot_rounds(
         all_results, code_distances, p_gate,
         PM_RAW_16MS, PM_DEN, Rm, Rc, delta,
-        ATOM_LOSS, ATOM_LOSS,
+        ATOM_LOSS_16MS, ATOM_LOSS,
         save_path=os.path.join(data_dir, "plot5_rounds_comparison.pdf"),
     )
 
