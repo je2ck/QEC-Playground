@@ -75,14 +75,26 @@ from utils import (
 
 MYBENCH_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 5ms parameters
 PM_RAW = 0.023368
-PM_DEN = 0.009313 
+PM_DEN = 0.009313
+PM_RAW_16MS = 0.0001     # 16ms raw measurement error probability
 ATOM_LOSS = 0.00019 * 5  # 0.00095
 
 CSV_2D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_unsup_sweep_2d.csv")
 CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
 DELTA_2D = 0.475
 DELTA_1D_DEFAULT = 0.15386374
+
+# 8ms parameters
+PM_RAW_8MS = 0.01766863506
+PM_DEN_8MS = 0.00068
+ATOM_LOSS_8MS = 0.00019 * 8  # 0.00152
+
+CSV_2D_8MS = os.path.join(MYBENCH_DIR, "data", "8ms_erasure_unsup_sweep_2d.csv")
+CSV_1D_8MS = os.path.join(MYBENCH_DIR, "data", "8ms_erasure_amp_sweep_1d.csv")
+DELTA_2D_8MS = 0.499
+DELTA_1D_8MS_DEFAULT = 0.27646678
 
 CODE_DISTANCES_QUICK = [5, 7, 9, 11]
 CODE_DISTANCES_FULL = [3, 5, 7, 9, 11, 13]
@@ -95,7 +107,7 @@ RUNTIME_FULL = (40000, 3600)
 RUNTIME_ROUGH_QUICK = (100, 30)
 RUNTIME_ROUGH_FULL = (2000, 300)
 
-ALL_PLOTS = [1, 2, 3, 4, 5, 6]
+ALL_PLOTS = [1, 2, 3, 4, 5, 6, 7, 8]
 
 
 # ============== Helpers ==============
@@ -328,18 +340,21 @@ def plot_rounds(all_results, code_distances, p_gate,
     fig, axes = plt.subplots(1, n_d, figsize=(5.5 * n_d, 5), squeeze=False)
 
     ratio = Rm / Rc if Rc > 0 else float('inf')
+    # Auto-detect scenario keys from all_results
+    raw_key = next((k for k in all_results if k.startswith('raw')), 'raw')
+    era_key = next((k for k in all_results if k.startswith('erasure')), 'erasure')
     styles = {
-        'raw':     {'label': f'Raw (Pm={Pm_raw:.4f})',
+        raw_key:   {'label': f'Raw (Pm={Pm_raw:.4f})',
                     'color': 'C3', 'marker': '^', 'ls': '--'},
-        'erasure': {'label': f'Erasure (Pm={Pm_erasure:.4f}, Rm/Rc={ratio:.0f}x)',
+        era_key:   {'label': f'Erasure (Pm={Pm_erasure:.4f}, Rm/Rc={ratio:.0f}x)',
                     'color': 'C0', 'marker': 'o', 'ls': '-'},
     }
 
     pl_values = {}
     if pl_raw > 0:
-        pl_values['raw'] = pl_raw
+        pl_values[raw_key] = pl_raw
     if pl_erasure > 0:
-        pl_values['erasure'] = pl_erasure
+        pl_values[era_key] = pl_erasure
 
     for i, d in enumerate(code_distances):
         ax = axes[0][i]
@@ -707,6 +722,7 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
 
     data_dir = ensure_dir(os.path.join(output_dir, "plot5"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
+    print(f"  Raw(16ms) Pm={PM_RAW_16MS:.4f}, Erasure(5ms) Pm={PM_DEN:.6f}")
     print(f"  p_gate={p_gate:.2e}, pl={ATOM_LOSS:.5f}, max_rounds={max_rounds}")
 
     results_file = os.path.join(data_dir, "results.json")
@@ -731,12 +747,12 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
         if os.path.exists(results_file):
             all_results, _ = load_rounds_results(results_file)
 
-        noise_raw = make_noise_config_raw(PM_RAW, pl=ATOM_LOSS, realistic_loss=True)
+        noise_raw_16ms = make_noise_config_raw(PM_RAW_16MS, pl=ATOM_LOSS, realistic_loss=True)
         noise_era = make_noise_config_erasure(PM_DEN, Rm, Rc, pl=ATOM_LOSS, realistic_loss=True)
 
         scenarios = [
-            ('raw', 'Raw', noise_raw),
-            ('erasure', 'Erasure', noise_era),
+            ('raw_16ms', 'Raw(16ms)', noise_raw_16ms),
+            ('erasure', 'Erasure(5ms)', noise_era),
         ]
 
         for sc_key, sc_label, noise_config in scenarios:
@@ -748,12 +764,13 @@ def do_plot5(output_dir, code_distances, runtime_budget, n_workers, mode,
             )
             save_rounds_results(all_results, {
                 "p_gate": p_gate, "pl": ATOM_LOSS,
+                "pm_raw_16ms": PM_RAW_16MS, "pm_den": PM_DEN,
                 "delta": delta, "max_rounds": max_rounds,
             }, results_file)
 
     plot_rounds(
         all_results, code_distances, p_gate,
-        PM_RAW, PM_DEN, Rm, Rc, delta,
+        PM_RAW_16MS, PM_DEN, Rm, Rc, delta,
         ATOM_LOSS, ATOM_LOSS,
         save_path=os.path.join(data_dir, "plot5_rounds_comparison.pdf"),
     )
@@ -881,6 +898,131 @@ def do_plot6(output_dir, code_distances, code_distances_th,
     )
 
 
+def do_plot7(output_dir, code_distances, code_distances_th,
+             runtime_budget, n_workers, mode, rough_runtime_budget=None):
+    """Plot 7: Raw vs Erasure(2d) threshold (8ms, no loss)."""
+    print(f"\n{'='*70}")
+    print(f"  Plot 7: [8ms] Raw vs Erasure(2d) threshold (no loss)")
+    print(f"{'='*70}")
+
+    data_dir = ensure_dir(os.path.join(output_dir, "plot7"))
+    Rm, Rc, delta = get_erasure_params(CSV_2D_8MS, DELTA_2D_8MS)
+    ratio = Rm / Rc if Rc > 0 else float('inf')
+    print(f"  Pm_raw={PM_RAW_8MS:.6f}, Pm_den={PM_DEN_8MS:.6f}")
+    print(f"  Rm={Rm:.6f}, Rc={Rc:.8f}, Rm/Rc={ratio:.0f}x, delta={delta:.3f}")
+
+    p_list = p_list_range(-4, -1, 20 if mode == 'full' else 12)
+    results_file = os.path.join(data_dir, "results.json")
+
+    if mode == 'plot':
+        if not os.path.exists(results_file):
+            print(f"  [SKIP] No results file: {results_file}")
+            return
+        with open(results_file) as f:
+            saved = json.load(f)
+        results_raw = {int(k): v for k, v in saved["raw"].items()}
+        results_era = {int(k): v for k, v in saved["erasure"].items()}
+        th_raw = saved.get("th_raw")
+        th_era = saved.get("th_erasure")
+    else:
+        sim_raw = create_simulate_func_no_erasure(PM_RAW_8MS)
+        results_raw = run_p_sweep(
+            "Raw(8ms)", sim_raw, code_distances, p_list, runtime_budget,
+            os.path.join(data_dir, "ckpt_raw.json"), n_workers)
+
+        sim_era = create_simulate_func_erasure(PM_DEN_8MS, Rm, Rc)
+        results_era = run_p_sweep(
+            "Erasure(2d,8ms)", sim_era, code_distances, p_list, runtime_budget,
+            os.path.join(data_dir, "ckpt_erasure.json"), n_workers)
+
+        rough_budget = rough_runtime_budget or runtime_budget
+        th_raw, _ = find_threshold_analyzer(
+            sim_raw, code_distances_th, rough_budget, runtime_budget, label="Raw(8ms)")
+        th_era, _ = find_threshold_analyzer(
+            sim_era, code_distances_th, rough_budget, runtime_budget, label="Erasure(2d,8ms)")
+
+        saved = {
+            "raw": {str(d): v for d, v in results_raw.items()},
+            "erasure": {str(d): v for d, v in results_era.items()},
+            "th_raw": th_raw, "th_erasure": th_era,
+        }
+        with open(results_file, 'w') as f:
+            json.dump(saved, f, indent=2)
+
+    plot_threshold_comparison(
+        results_raw, results_era, code_distances,
+        "Raw (8ms)", "Erasure 2D (8ms)", th_raw, th_era,
+        title=f"[8ms] Raw (Pm={PM_RAW_8MS:.4f}) vs Erasure-2D (Pm={PM_DEN_8MS:.4f}, delta={delta:.3f})",
+        save_path=os.path.join(data_dir, "plot7_threshold_raw_vs_erasure2d_8ms.pdf"),
+    )
+    return results_raw, results_era
+
+
+def do_plot8(output_dir, code_distances, code_distances_th,
+             runtime_budget, n_workers, mode, delta_1d_8ms=DELTA_1D_8MS_DEFAULT):
+    """Plot 8: Den vs Erasure(1d) vs Erasure(2d) (8ms, no loss)."""
+    print(f"\n{'='*70}")
+    print(f"  Plot 8: [8ms] Den vs Erasure(1d) vs Erasure(2d) (no loss)")
+    print(f"{'='*70}")
+
+    data_dir = ensure_dir(os.path.join(output_dir, "plot8"))
+    Rm_2d, Rc_2d, delta_2d = get_erasure_params(CSV_2D_8MS, DELTA_2D_8MS)
+    Rm_1d, Rc_1d, delta_1d = get_erasure_params(CSV_1D_8MS, delta_1d_8ms)
+    print(f"  Pm_den={PM_DEN_8MS:.6f}")
+    print(f"  2D: Rm={Rm_2d:.6f}, Rc={Rc_2d:.8f}, delta={delta_2d:.3f}")
+    print(f"  1D: Rm={Rm_1d:.6f}, Rc={Rc_1d:.8f}, delta={delta_1d:.5f}")
+
+    p_list = p_list_range(-3, -2, 20 if mode == 'full' else 12)
+    results_file = os.path.join(data_dir, "results.json")
+
+    if mode == 'plot':
+        if not os.path.exists(results_file):
+            print(f"  [SKIP] No results file")
+            return
+        with open(results_file) as f:
+            saved = json.load(f)
+        results_den = {int(k): v for k, v in saved["den"].items()}
+        results_1d = {int(k): v for k, v in saved["erasure_1d"].items()}
+        results_2d = {int(k): v for k, v in saved["erasure_2d"].items()}
+    else:
+        sim_den = create_simulate_func_no_erasure(PM_DEN_8MS)
+        results_den = run_p_sweep(
+            "Den(8ms)", sim_den, code_distances, p_list, runtime_budget,
+            os.path.join(data_dir, "ckpt_den.json"), n_workers)
+
+        sim_1d = create_simulate_func_erasure(PM_DEN_8MS, Rm_1d, Rc_1d)
+        results_1d = run_p_sweep(
+            "Erasure(1d,8ms)", sim_1d, code_distances, p_list, runtime_budget,
+            os.path.join(data_dir, "ckpt_1d.json"), n_workers)
+
+        sim_2d = create_simulate_func_erasure(PM_DEN_8MS, Rm_2d, Rc_2d)
+        results_2d = run_p_sweep(
+            "Erasure(2d,8ms)", sim_2d, code_distances, p_list, runtime_budget,
+            os.path.join(data_dir, "ckpt_2d.json"), n_workers)
+
+        saved = {
+            "den": {str(d): v for d, v in results_den.items()},
+            "erasure_1d": {str(d): v for d, v in results_1d.items()},
+            "erasure_2d": {str(d): v for d, v in results_2d.items()},
+        }
+        with open(results_file, 'w') as f:
+            json.dump(saved, f, indent=2)
+
+    plot_three_scenarios(
+        {
+            f'Den (Pm={PM_DEN_8MS:.4f})':
+                (results_den, 'C3', '--', False),
+            f'Erasure 1D (delta={delta_1d:.3f})':
+                (results_1d, 'C1', '-.', True),
+            f'Erasure 2D (delta={delta_2d:.3f})':
+                (results_2d, 'C0', '-', True),
+        },
+        code_distances,
+        title=f"[8ms] Erasure Effect Comparison (Pm_den={PM_DEN_8MS:.4f})",
+        save_path=os.path.join(data_dir, "plot8_erasure_comparison_8ms.pdf"),
+    )
+
+
 # ============== Main ==============
 
 if __name__ == "__main__":
@@ -893,12 +1035,14 @@ if __name__ == "__main__":
                         help='Parallel workers (0=all cores, 1=sequential)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: results_paper)')
-    parser.add_argument('--p-gate', type=float, default=0.0005,
+    parser.add_argument('--p-gate', type=float, default=0.005,
                         help='Gate error rate for plot 5 (default: 0.0005)')
     parser.add_argument('--max-rounds', type=int, default=100,
                         help='Max measurement rounds for plot 5 (default: 100)')
     parser.add_argument('--delta-1d', type=float, default=DELTA_1D_DEFAULT,
-                        help=f'Delta for 1D erasure (default: {DELTA_1D_DEFAULT})')
+                        help=f'Delta for 5ms 1D erasure (default: {DELTA_1D_DEFAULT})')
+    parser.add_argument('--delta-1d-8ms', type=float, default=DELTA_1D_8MS_DEFAULT,
+                        help=f'Delta for 8ms 1D erasure (default: {DELTA_1D_8MS_DEFAULT})')
     parser.add_argument('--fresh', action='store_true',
                         help='Delete existing checkpoints and start fresh')
     args = parser.parse_args()
@@ -969,27 +1113,37 @@ if __name__ == "__main__":
                  runtime_budget, n_workers, args.mode,
                  delta_1d=args.delta_1d)
 
-    if 3 in plots_to_run:
-        ret = do_plot3(output_dir, code_distances, code_distances_th,
-                       runtime_budget, n_workers, args.mode,
-                       rough_runtime_budget=rough_runtime_budget)
-        if ret is not None:
-            plot3_results = ret
+    # if 3 in plots_to_run:
+    #     ret = do_plot3(output_dir, code_distances, code_distances_th,
+    #                    runtime_budget, n_workers, args.mode,
+    #                    rough_runtime_budget=rough_runtime_budget)
+    #     if ret is not None:
+    #         plot3_results = ret
 
-    if 4 in plots_to_run:
-        do_plot4(output_dir, code_distances, code_distances_th,
-                 runtime_budget, n_workers, args.mode,
-                 delta_1d=args.delta_1d)
+    # if 4 in plots_to_run:
+    #     do_plot4(output_dir, code_distances, code_distances_th,
+    #              runtime_budget, n_workers, args.mode,
+    #              delta_1d=args.delta_1d)
 
     if 5 in plots_to_run:
         do_plot5(output_dir, code_distances, runtime_budget, n_workers,
                  args.mode, args.p_gate, args.max_rounds)
 
-    if 6 in plots_to_run:
-        do_plot6(output_dir, code_distances, code_distances_th,
+    # if 6 in plots_to_run:
+    #     do_plot6(output_dir, code_distances, code_distances_th,
+    #              runtime_budget, n_workers, args.mode,
+    #              plot1_results=plot1_results,
+    #              plot3_results=plot3_results)
+
+    if 7 in plots_to_run:
+        do_plot7(output_dir, code_distances, code_distances_th,
                  runtime_budget, n_workers, args.mode,
-                 plot1_results=plot1_results,
-                 plot3_results=plot3_results)
+                 rough_runtime_budget=rough_runtime_budget)
+
+    if 8 in plots_to_run:
+        do_plot8(output_dir, code_distances, code_distances_th,
+                 runtime_budget, n_workers, args.mode,
+                 delta_1d_8ms=args.delta_1d_8ms)
 
     print(f"\n{'#'*70}")
     print(f"  Done! All outputs in: {output_dir}")
