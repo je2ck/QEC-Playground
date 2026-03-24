@@ -615,6 +615,8 @@ impl NoiseModelBuilder {
                 //   Once lost, ancilla stays lost for all subsequent rounds
                 let mut ancilla_loss_probability = 0.; // 1 - Ps (per round)
                 let mut ancilla_loss_as_erasure = false; // default: true loss (no erasure flag)
+                let mut ancilla_loss_realistic = false; // default: legacy (measurement-only)
+                let mut ancilla_loss_idle_error_rate = 0.; // 0 = auto from gate error rate p
                 let mut config_cloned = noise_model_configuration.clone();
                 let config = config_cloned
                     .as_object_mut()
@@ -657,6 +659,13 @@ impl NoiseModelBuilder {
                 if let Some(value) = config.remove("ancilla_loss_as_erasure") {
                     // true: decoder gets erasure flag (advantage); false (default): true loss, no hint
                     ancilla_loss_as_erasure = value.as_bool().expect("bool");
+                }
+                if let Some(value) = config.remove("ancilla_loss_realistic") {
+                    // true: disable CNOT gates for lost ancillas, apply idle noise to partner data qubits
+                    ancilla_loss_realistic = value.as_bool().expect("bool");
+                }
+                if let Some(value) = config.remove("ancilla_loss_idle_error_rate") {
+                    ancilla_loss_idle_error_rate = value.as_f64().expect("f64");
                 }
                 if !config.is_empty() {
                     panic!("unknown keys: {:?}", config.keys().collect::<Vec<&String>>());
@@ -930,6 +939,12 @@ impl NoiseModelBuilder {
                 // Set ancilla loss parameters in noise model for use during simulation
                 noise_model.ancilla_loss_probability = ancilla_loss_probability;
                 noise_model.ancilla_loss_as_erasure = ancilla_loss_as_erasure;
+                noise_model.ancilla_loss_realistic = ancilla_loss_realistic;
+                noise_model.ancilla_loss_idle_error_rate = if ancilla_loss_idle_error_rate > 0. {
+                    ancilla_loss_idle_error_rate
+                } else {
+                    p // default: use the gate error rate
+                };
                 noise_model.measurement_cycles = simulator.measurement_cycles;
             }
             Self::StimNoiseModel => {

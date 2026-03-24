@@ -157,7 +157,7 @@ def run_single_simulation(p, d, T, noise_config, runtime_budget):
     return (pL, pL_dev)
 
 
-def make_noise_config_raw(Pm, pl=0.0):
+def make_noise_config_raw(Pm, pl=0.0, realistic_loss=False):
     """Raw: measurement_error_rate = Pm, no erasure, optional atom loss."""
     config = {
         "use_correlated_pauli": True,
@@ -166,10 +166,12 @@ def make_noise_config_raw(Pm, pl=0.0):
     }
     if pl > 0:
         config["ancilla_loss_probability"] = pl
+        if realistic_loss:
+            config["ancilla_loss_realistic"] = True
     return config
 
 
-def make_noise_config_erasure(Pm, Rm, Rc, pl=0.0):
+def make_noise_config_erasure(Pm, Rm, Rc, pl=0.0, realistic_loss=False):
     """Erasure: hard erasure model, optional atom loss."""
     measurement_error_rate = Pm * (1 - Rm)
     measurement_error_rate_with_erasure = Pm * Rm
@@ -183,6 +185,8 @@ def make_noise_config_erasure(Pm, Rm, Rc, pl=0.0):
     }
     if pl > 0:
         config["ancilla_loss_probability"] = pl
+        if realistic_loss:
+            config["ancilla_loss_realistic"] = True
     return config
 
 
@@ -352,6 +356,7 @@ def filter_remaining_rounds(rounds_list, existing_results):
 
 def plot_rounds_comparison(all_results, code_distances, p_gate, delta,
                            Pm_raw, Pm_erasure, Rm, Rc,
+                           pl_raw=0.0, pl_erasure=0.0,
                            save_path="rounds_comparison_long.pdf"):
     """Plot per-round LER vs measurement rounds T for Raw vs Erasure."""
     n_d = len(code_distances)
@@ -365,8 +370,17 @@ def plot_rounds_comparison(all_results, code_distances, p_gate, delta,
                     'color': 'C0', 'marker': 'o', 'ls': '-'},
     }
 
+    # Determine which pl values to show on secondary axis
+    pl_values = {}
+    if pl_raw > 0:
+        pl_values['raw'] = pl_raw
+    if pl_erasure > 0:
+        pl_values['erasure'] = pl_erasure
+    show_loss = len(pl_values) > 0
+
     for i, d in enumerate(code_distances):
         ax = axes[0][i]
+        n_ancillas = d * d - 1
 
         for scenario, style in scenario_styles.items():
             if scenario not in all_results or d not in all_results[scenario]:
@@ -385,6 +399,21 @@ def plot_rounds_comparison(all_results, code_distances, p_gate, delta,
                     marker=style['marker'], linestyle=style['ls'],
                     color=style['color'], markersize=4, linewidth=1.2,
                     label=style['label'])
+
+        # Secondary y-axis: expected lost ancillas
+        if show_loss:
+            ax2 = ax.twinx()
+            T_range = np.linspace(d, max(d, 100), 200)
+            for sc_key, pl in pl_values.items():
+                expected_lost = n_ancillas * (1 - (1 - pl) ** T_range)
+                sc_color = 'C3' if sc_key == 'raw' else 'C0'
+                ax2.plot(T_range, expected_lost,
+                         color=sc_color, linestyle=':', alpha=0.4, linewidth=1.5,
+                         label=f'E[lost] {sc_key} (pl={pl:.4f})')
+            ax2.set_ylabel(f'Expected lost ancillas (of {n_ancillas})', fontsize=9,
+                           color='gray')
+            ax2.tick_params(axis='y', labelcolor='gray', labelsize=8)
+            ax2.legend(fontsize=7, loc='lower right', framealpha=0.6)
 
         ax.axvline(x=d, color='gray', linestyle=':', alpha=0.5, linewidth=1)
         ax.text(d + 0.5, ax.get_ylim()[0] if ax.get_ylim()[0] > 0 else 1e-6,
@@ -493,6 +522,9 @@ if __name__ == "__main__":
                         help='Number of parallel workers (0 = all cores, 1 = sequential)')
     parser.add_argument('--refresh', action='store_true',
                         help='Discard previous results and start fresh')
+    parser.add_argument('--realistic-loss', action='store_true',
+                        help='Use realistic atom loss model (disable CNOT gates, '
+                             'apply idle noise to partner data qubits)')
     args = parser.parse_args()
     args.parallel = resolve_parallel_workers(args.parallel)
 
@@ -543,7 +575,9 @@ if __name__ == "__main__":
         ))
 
         plot_rounds_comparison(all_results, code_distances, p_gate, delta_actual,
-                               Pm_raw, Pm_erasure, Rm, Rc, save_path=output)
+                               Pm_raw, Pm_erasure, Rm, Rc,
+                               pl_raw=pl_raw, pl_erasure=pl_erasure,
+                               save_path=output)
 
         ratio_path = output.replace('.pdf', '_ratio.pdf')
         plot_improvement_ratio(all_results, code_distances, p_gate, delta_actual,
@@ -586,8 +620,8 @@ if __name__ == "__main__":
     # Determine remaining work per scenario
     n_scenarios = 2
     scenarios_config = [
-        ('raw',     'Raw',     make_noise_config_raw(Pm_raw, pl_raw),         Pm_raw,     pl_raw),
-        ('erasure', 'Erasure', make_noise_config_erasure(Pm_erasure, Rm, Rc, pl_erasure), Pm_erasure, pl_erasure),
+        ('raw',     'Raw',     make_noise_config_raw(Pm_raw, pl_raw, args.realistic_loss),         Pm_raw,     pl_raw),
+        ('erasure', 'Erasure', make_noise_config_erasure(Pm_erasure, Rm, Rc, pl_erasure, args.realistic_loss), Pm_erasure, pl_erasure),
     ]
 
     for sc_idx, (sc_key, sc_label, noise_config, sc_pm, sc_pl) in enumerate(scenarios_config):
@@ -677,7 +711,9 @@ if __name__ == "__main__":
 
     # Plot
     plot_rounds_comparison(all_results, code_distances, p_gate, delta_actual,
-                           Pm_raw, Pm_erasure, Rm, Rc, save_path=output)
+                           Pm_raw, Pm_erasure, Rm, Rc,
+                           pl_raw=pl_raw, pl_erasure=pl_erasure,
+                           save_path=output)
 
     ratio_path = output.replace('.pdf', '_ratio.pdf')
     plot_improvement_ratio(all_results, code_distances, p_gate, delta_actual,

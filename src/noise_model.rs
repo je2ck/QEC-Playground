@@ -30,6 +30,17 @@ pub struct NoiseModel {
     /// - true: erasure treatment — has_erasure = true; decoder knows and can reweight edges
     #[serde(default)]
     pub ancilla_loss_as_erasure: bool,
+    /// Realistic ancilla loss model:
+    /// - false (default): only randomize measurement outcome (legacy behavior)
+    /// - true: also disable CNOT gates involving lost ancilla + apply idle depolarizing
+    ///   noise on the partner data qubits + skip error propagation through those gates
+    #[serde(default)]
+    pub ancilla_loss_realistic: bool,
+    /// Idle depolarizing error rate for data qubits whose ancilla partner is lost.
+    /// Each of X, Y, Z applied with probability idle_error_rate / 3.
+    /// If 0 (default), uses the gate error rate p from the noise model builder.
+    #[serde(default)]
+    pub ancilla_loss_idle_error_rate: f64,
     /// Number of measurement cycles (for ancilla loss model)
     #[serde(default = "default_measurement_cycles")]
     pub measurement_cycles: usize,
@@ -181,6 +192,8 @@ impl NoiseModel {
             additional_noise: vec![],
             ancilla_loss_probability: 0.,
             ancilla_loss_as_erasure: false,
+            ancilla_loss_realistic: false,
+            ancilla_loss_idle_error_rate: 0.,
             measurement_cycles: simulator.measurement_cycles,
         }
     }

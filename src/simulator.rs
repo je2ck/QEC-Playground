@@ -609,6 +609,80 @@ impl Simulator {
         None
     }
 
+    /// Like `propagate_errors` but skips peer propagation through gates involving lost ancillas.
+    /// When an ancilla is lost, its CNOT gate with data qubits doesn't execute,
+    /// so errors should not propagate between them.
+    #[inline(never)]
+    pub fn propagate_errors_with_loss(
+        &mut self,
+        ancilla_lost: &std::collections::HashMap<(usize, usize), usize>,
+        measurement_cycles: usize,
+    ) {
+        for t in 0..self.height - 1 {
+            simulator_iter!(self, position, _node, t => t, {
+                self.propagate_error_from_with_loss(position, ancilla_lost, measurement_cycles);
+            });
+        }
+    }
+
+    /// Like `propagate_error_from` but skips peer propagation when one partner is a lost ancilla.
+    #[inline]
+    fn propagate_error_from_with_loss(
+        &mut self,
+        position: &Position,
+        ancilla_lost: &std::collections::HashMap<(usize, usize), usize>,
+        measurement_cycles: usize,
+    ) -> Option<Position> {
+        debug_assert!(position.t < self.height - 1);
+        let node = self.get_node_unwrap(position);
+        let propagate_to_peer_forbidden = node.is_virtual && !node.is_peer_virtual;
+        let node_propagated = node.propagated;
+        let node_gate_peer = node.gate_peer.clone();
+        let propagate_to_next = node.error.multiply(&node_propagated);
+        let gate_type = node.gate_type;
+        let node_qubit_type = node.qubit_type;
+
+        let next_position = &mut position.clone();
+        next_position.t += 1;
+        let next_node = self.get_node_mut_unwrap(next_position);
+        next_node.propagated = next_node.propagated.multiply(&propagate_to_next);
+        if gate_type.is_initialization() {
+            next_node.propagated = I;
+        }
+
+        // Skip peer propagation if either this node or its peer is a lost ancilla
+        if !propagate_to_peer_forbidden && gate_type.is_two_qubit_gate() {
+            if let Some(ref peer_pos) = node_gate_peer {
+                let current_round = position.t / measurement_cycles;
+
+                // Check if this node is a lost ancilla
+                let this_is_lost = node_qubit_type != QubitType::Data
+                    && ancilla_lost.get(&(position.i, position.j))
+                        .map_or(false, |&lr| current_round >= lr);
+
+                // Check if peer is a lost ancilla
+                let peer_node = self.get_node_unwrap(peer_pos);
+                let peer_is_lost = peer_node.qubit_type != QubitType::Data
+                    && ancilla_lost.get(&(peer_pos.i, peer_pos.j))
+                        .map_or(false, |&lr| current_round >= lr);
+
+                if !this_is_lost && !peer_is_lost {
+                    // Normal propagation: gate executes
+                    let propagate_to_peer = gate_type.propagate_peer(&node_propagated);
+                    if propagate_to_peer != I {
+                        let mut next_peer_position: Position = (**peer_pos).clone();
+                        next_peer_position.t += 1;
+                        let peer_node = self.get_node_mut_unwrap(&next_peer_position);
+                        peer_node.propagated = peer_node.propagated.multiply(&propagate_to_peer);
+                        return Some(next_peer_position);
+                    }
+                }
+                // else: gate disabled due to atom loss, no peer propagation
+            }
+        }
+        None
+    }
+
     /// including virtual measurements in the result as an extension to [`Simulator::generate_sparse_measurement`]
     #[inline(never)]
     pub fn generate_sparse_measurement_virtual(&self) -> SparseMeasurement {
@@ -881,112 +955,189 @@ impl SimulatorGenerics for Simulator {
             }
         }
 
+        // Realistic loss model configuration
+        let realistic_loss = noise_model.ancilla_loss_realistic && ancilla_loss_prob > 0.;
+        let idle_error_rate = noise_model.ancilla_loss_idle_error_rate;
+
+        // Helper: check if an ancilla at (i, j) is lost at time t
+        let is_lost_at = |i: usize, j: usize, t: usize| -> bool {
+            if !realistic_loss || measurement_cycles == 0 { return false; }
+            if let Some(&loss_round) = ancilla_lost.get(&(i, j)) {
+                let current_round = t / measurement_cycles;
+                current_round >= loss_round
+            } else {
+                false
+            }
+        };
+
         // first apply single-qubit and two-qubit correlated errors
         simulator_iter_mut!(self, position, node, {
             let noise_model_node = noise_model.get_node_unwrap(position);
-            let random_pauli = rng.next_f64();
-            if random_pauli < noise_model_node.pauli_error_rates.error_rate_X {
-                node.set_error_temp(&X);
-                // println!("X error at {} {} {}",node.i, node.j, node.t);
-            } else if random_pauli
-                < noise_model_node.pauli_error_rates.error_rate_X + noise_model_node.pauli_error_rates.error_rate_Z
-            {
-                node.set_error_temp(&Z);
-                // println!("Z error at {} {} {}",node.i, node.j, node.t);
-            } else if random_pauli < noise_model_node.pauli_error_rates.error_probability() {
-                node.set_error_temp(&Y);
-                // println!("Y error at {} {} {}",node.i, node.j, node.t);
+
+            // Check if this node is a lost ancilla (realistic mode)
+            let this_is_lost_ancilla = realistic_loss
+                && node.qubit_type != QubitType::Data
+                && is_lost_at(position.i, position.j, position.t);
+
+            // Check if this node's gate_peer is a lost ancilla (realistic mode)
+            let peer_is_lost_ancilla = if realistic_loss && node.gate_type.is_two_qubit_gate() {
+                if let Some(ref peer_pos) = node.gate_peer {
+                    is_lost_at(peer_pos.i, peer_pos.j, peer_pos.t)
+                } else {
+                    false
+                }
             } else {
+                false
+            };
+
+            // For lost ancilla at gate layers: skip all noise (gate doesn't execute)
+            // For data qubit whose partner ancilla is lost: skip correlated gate noise,
+            // apply idle depolarizing noise instead
+            if this_is_lost_ancilla && !node.gate_type.is_measurement() {
+                // Lost ancilla at gate time step: no noise, no gate
                 node.set_error_temp(&I);
-            }
-            if node.error != I {
-                error_count += 1;
-            }
-            let random_erasure = rng.next_f64();
-            node.has_erasure = false;
-            node.erasure_weight = 0.0;
-            node.propagated = I; // clear propagated errors
-            if let Some(ref classes) = noise_model_node.erasure_classes {
-                // Multi-class erasure sampling
-                let mut cumulative = 0.0;
-                for class in classes {
-                    cumulative += class.erasure_rate;
-                    if random_erasure < cumulative {
-                        pending_erasure_errors.push((
-                            position.clone(),
-                            class.erasure_weight,
-                            Some(class.pauli_error_rates_given_erasure.clone()),
-                        ));
-                        break;
+                node.has_erasure = false;
+                node.erasure_weight = 0.0;
+                node.propagated = I;
+                // Still consume RNG to keep stream deterministic
+                let _r1 = rng.next_f64(); // would-be pauli
+                let _r2 = rng.next_f64(); // would-be erasure
+                if noise_model_node.correlated_pauli_error_rates.is_some() {
+                    let _r3 = rng.next_f64();
+                }
+                if noise_model_node.correlated_erasure_error_rates.is_some() {
+                    let _r4 = rng.next_f64();
+                }
+            } else {
+                // Normal single-qubit Pauli noise (or idle noise for data qubit with lost partner)
+                if peer_is_lost_ancilla && !node.gate_type.is_measurement() {
+                    // Data qubit whose ancilla partner is lost: apply idle depolarizing noise
+                    let random_pauli = rng.next_f64();
+                    let idle_p3 = idle_error_rate / 3.;
+                    if random_pauli < idle_p3 {
+                        node.set_error_temp(&X);
+                    } else if random_pauli < 2. * idle_p3 {
+                        node.set_error_temp(&Z);
+                    } else if random_pauli < idle_error_rate {
+                        node.set_error_temp(&Y);
+                    } else {
+                        node.set_error_temp(&I);
+                    }
+                } else {
+                    // Normal noise from noise model
+                    let random_pauli = rng.next_f64();
+                    if random_pauli < noise_model_node.pauli_error_rates.error_rate_X {
+                        node.set_error_temp(&X);
+                    } else if random_pauli
+                        < noise_model_node.pauli_error_rates.error_rate_X + noise_model_node.pauli_error_rates.error_rate_Z
+                    {
+                        node.set_error_temp(&Z);
+                    } else if random_pauli < noise_model_node.pauli_error_rates.error_probability() {
+                        node.set_error_temp(&Y);
+                    } else {
+                        node.set_error_temp(&I);
                     }
                 }
-            } else if random_erasure < noise_model_node.erasure_error_rate {
-                pending_erasure_errors.push((position.clone(), 1.0, None));
-            }
+                if node.error != I {
+                    error_count += 1;
+                }
+                let random_erasure = rng.next_f64();
+                node.has_erasure = false;
+                node.erasure_weight = 0.0;
+                node.propagated = I; // clear propagated errors
 
-            // Ancilla loss model
-            if ancilla_loss_prob > 0. && measurement_cycles > 0 && node.qubit_type != QubitType::Data {
-                if let Some(&loss_round) = ancilla_lost.get(&(position.i, position.j)) {
-                    let current_round = position.t / measurement_cycles;
-                    // Only act at measurement layers
-                    if current_round >= loss_round && position.t % measurement_cycles == 0 {
-                        if noise_model.ancilla_loss_as_erasure {
-                            // Erasure mode: decoder gets has_erasure flag and can reweight edges
-                            pending_erasure_errors.push((position.clone(), 1.0, None));
-                        } else {
-                            // True loss mode (default): random Pauli applied, no erasure flag
-                            // → decoder sees a potentially wrong syndrome bit with no hint
-                            let r = rng.next_f64();
-                            let loss_pauli = if r < 0.25 { X }
-                                       else if r < 0.5  { Z }
-                                       else if r < 0.75 { Y }
-                                       else             { I };
-                            if loss_pauli != I {
-                                pending_pauli_errors.push((position.clone(), loss_pauli));
+                if peer_is_lost_ancilla && !node.gate_type.is_measurement() {
+                    // Data qubit with lost partner: no erasure from gate
+                } else {
+                    if let Some(ref classes) = noise_model_node.erasure_classes {
+                        let mut cumulative = 0.0;
+                        for class in classes {
+                            cumulative += class.erasure_rate;
+                            if random_erasure < cumulative {
+                                pending_erasure_errors.push((
+                                    position.clone(),
+                                    class.erasure_weight,
+                                    Some(class.pauli_error_rates_given_erasure.clone()),
+                                ));
+                                break;
+                            }
+                        }
+                    } else if random_erasure < noise_model_node.erasure_error_rate {
+                        pending_erasure_errors.push((position.clone(), 1.0, None));
+                    }
+                }
+
+                // Ancilla loss model — measurement layer behavior (random Pauli or erasure)
+                if ancilla_loss_prob > 0. && measurement_cycles > 0 && node.qubit_type != QubitType::Data {
+                    if let Some(&loss_round) = ancilla_lost.get(&(position.i, position.j)) {
+                        let current_round = position.t / measurement_cycles;
+                        if current_round >= loss_round && position.t % measurement_cycles == 0 {
+                            if noise_model.ancilla_loss_as_erasure {
+                                pending_erasure_errors.push((position.clone(), 1.0, None));
+                            } else {
+                                let r = rng.next_f64();
+                                let loss_pauli = if r < 0.25 { X }
+                                           else if r < 0.5  { Z }
+                                           else if r < 0.75 { Y }
+                                           else             { I };
+                                if loss_pauli != I {
+                                    pending_pauli_errors.push((position.clone(), loss_pauli));
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            match &noise_model_node.correlated_pauli_error_rates {
-                Some(correlated_pauli_error_rates) => {
-                    let random_pauli = rng.next_f64();
-                    let correlated_pauli_error_type = correlated_pauli_error_rates.generate_random_error(random_pauli);
-                    let my_error = correlated_pauli_error_type.my_error();
-                    if my_error != I {
-                        pending_pauli_errors.push((position.clone(), my_error));
+                // Correlated two-qubit gate errors
+                if peer_is_lost_ancilla || this_is_lost_ancilla {
+                    // Gate doesn't execute: skip correlated errors but consume RNG
+                    if noise_model_node.correlated_pauli_error_rates.is_some() {
+                        let _r = rng.next_f64();
                     }
-                    let peer_error = correlated_pauli_error_type.peer_error();
-                    if peer_error != I {
-                        let gate_peer = node
-                            .gate_peer
-                            .as_ref()
-                            .expect("correlated pauli error must corresponds to a two-qubit gate");
-                        pending_pauli_errors.push(((**gate_peer).clone(), peer_error));
+                    if noise_model_node.correlated_erasure_error_rates.is_some() {
+                        let _r = rng.next_f64();
+                    }
+                } else {
+                    match &noise_model_node.correlated_pauli_error_rates {
+                        Some(correlated_pauli_error_rates) => {
+                            let random_pauli = rng.next_f64();
+                            let correlated_pauli_error_type = correlated_pauli_error_rates.generate_random_error(random_pauli);
+                            let my_error = correlated_pauli_error_type.my_error();
+                            if my_error != I {
+                                pending_pauli_errors.push((position.clone(), my_error));
+                            }
+                            let peer_error = correlated_pauli_error_type.peer_error();
+                            if peer_error != I {
+                                let gate_peer = node
+                                    .gate_peer
+                                    .as_ref()
+                                    .expect("correlated pauli error must corresponds to a two-qubit gate");
+                                pending_pauli_errors.push(((**gate_peer).clone(), peer_error));
+                            }
+                        }
+                        None => {}
+                    }
+                    match &noise_model_node.correlated_erasure_error_rates {
+                        Some(correlated_erasure_error_rates) => {
+                            let random_erasure = rng.next_f64();
+                            let correlated_erasure_error_type =
+                                correlated_erasure_error_rates.generate_random_erasure_error(random_erasure);
+                            let my_error = correlated_erasure_error_type.my_error();
+                            if my_error {
+                                pending_erasure_errors.push((position.clone(), 1.0, None));
+                            }
+                            let peer_error = correlated_erasure_error_type.peer_error();
+                            if peer_error {
+                                let gate_peer = node
+                                    .gate_peer
+                                    .as_ref()
+                                    .expect("correlated erasure error must corresponds to a two-qubit gate");
+                                pending_erasure_errors.push(((**gate_peer).clone(), 1.0, None));
+                            }
+                        }
+                        None => {}
                     }
                 }
-                None => {}
-            }
-            match &noise_model_node.correlated_erasure_error_rates {
-                Some(correlated_erasure_error_rates) => {
-                    let random_erasure = rng.next_f64();
-                    let correlated_erasure_error_type =
-                        correlated_erasure_error_rates.generate_random_erasure_error(random_erasure);
-                    let my_error = correlated_erasure_error_type.my_error();
-                    if my_error {
-                        pending_erasure_errors.push((position.clone(), 1.0, None));
-                    }
-                    let peer_error = correlated_erasure_error_type.peer_error();
-                    if peer_error {
-                        let gate_peer = node
-                            .gate_peer
-                            .as_ref()
-                            .expect("correlated erasure error must corresponds to a two-qubit gate");
-                        pending_erasure_errors.push(((**gate_peer).clone(), 1.0, None));
-                    }
-                }
-                None => {}
             }
         });
         // then apply additional noises
@@ -1073,7 +1224,11 @@ impl SimulatorGenerics for Simulator {
             sparse_detected_erasures.len() == erasure_count
         });
         self.rng = rng; // save the random number generator
-        self.propagate_errors();
+        if realistic_loss {
+            self.propagate_errors_with_loss(&ancilla_lost, measurement_cycles);
+        } else {
+            self.propagate_errors();
+        }
         (error_count, erasure_count)
     }
 
