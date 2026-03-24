@@ -76,13 +76,13 @@ from utils import (
 MYBENCH_DIR = os.path.dirname(os.path.abspath(__file__))
 
 PM_RAW = 0.023368
-PM_DEN = 0.017289
+PM_DEN = 0.009313 
 ATOM_LOSS = 0.00019 * 5  # 0.00095
 
 CSV_2D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_unsup_sweep_2d.csv")
 CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
 DELTA_2D = 0.475
-DELTA_1D_DEFAULT = 0.53852309
+DELTA_1D_DEFAULT = 0.15386374
 
 CODE_DISTANCES_QUICK = [3, 5, 7, 9]       # d=9 needed for threshold estimation
 CODE_DISTANCES_FULL = [3, 5, 7, 9, 11, 13]
@@ -114,6 +114,18 @@ def p_list_range(log_min, log_max, n_points):
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def clean_dir(path):
+    """Remove all checkpoint/result files in a directory."""
+    import glob as globmod
+    for f in globmod.glob(os.path.join(path, "ckpt_*.json")):
+        os.remove(f)
+        print(f"  [fresh] Removed {os.path.basename(f)}")
+    results_f = os.path.join(path, "results.json")
+    if os.path.exists(results_f):
+        os.remove(results_f)
+        print(f"  [fresh] Removed results.json")
 
 
 # ============== Plot Functions ==============
@@ -824,6 +836,8 @@ if __name__ == "__main__":
                         help='Max measurement rounds for plot 5 (default: 100)')
     parser.add_argument('--delta-1d', type=float, default=DELTA_1D_DEFAULT,
                         help=f'Delta for 1D erasure (default: {DELTA_1D_DEFAULT})')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Delete existing checkpoints and start fresh')
     args = parser.parse_args()
 
     n_workers = resolve_parallel_workers(args.parallel)
@@ -867,6 +881,13 @@ if __name__ == "__main__":
     # Compile simulator if needed
     if args.mode != 'plot':
         compile_code_if_necessary()
+
+    # Clean checkpoints if --fresh
+    if args.fresh and args.mode != 'plot':
+        for p in plots_to_run:
+            plot_dir = os.path.join(output_dir, f"plot{p}")
+            if os.path.isdir(plot_dir):
+                clean_dir(plot_dir)
 
     # Run selected plots
     plot1_results = None
