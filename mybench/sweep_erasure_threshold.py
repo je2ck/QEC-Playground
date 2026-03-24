@@ -134,8 +134,17 @@ def get_params_from_row(row, pm_override=None):
         N_total = row['N_total']
         Pm = N_error / N_total if N_total > 0 else 0
 
-    Rm = row.get('P_erase_error_loss_cdf', 0) or 0
-    Rc = row.get('P_erase_correct_loss_cdf', 0) or 0
+    # Try _loss_cdf columns first (2D CSV), fall back to _loss (1D CSV)
+    Rm = row.get('P_erase_error_loss_cdf', None)
+    if Rm is None:
+        Rm = row.get('P_erase_error_loss', 0) or 0
+    else:
+        Rm = Rm or 0
+    Rc = row.get('P_erase_correct_loss_cdf', None)
+    if Rc is None:
+        Rc = row.get('P_erase_correct_loss', 0) or 0
+    else:
+        Rc = Rc or 0
     delta = row.get('delta', 0)
     N_erasure_loss = row.get('N_erasure_loss', 0) or 0
 
