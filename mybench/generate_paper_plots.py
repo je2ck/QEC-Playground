@@ -84,7 +84,7 @@ CSV_1D = os.path.join(MYBENCH_DIR, "data", "5ms_erasure_amp_sweep_1d.csv")
 DELTA_2D = 0.475
 DELTA_1D_DEFAULT = 0.15386374
 
-CODE_DISTANCES_QUICK = [3, 5, 7, 9, 11]
+CODE_DISTANCES_QUICK = [5, 7, 9, 11]
 CODE_DISTANCES_FULL = [3, 5, 7, 9, 11, 13]
 # For threshold estimation: always use 5,7,9,11
 CODE_DISTANCES_THRESHOLD = [5, 7, 9, 11]
