@@ -479,7 +479,7 @@ def do_plot1(output_dir, code_distances, code_distances_th,
     print(f"  Pm_raw={PM_RAW:.6f}, Pm_den={PM_DEN:.6f}")
     print(f"  Rm={Rm:.6f}, Rc={Rc:.8f}, Rm/Rc={ratio:.0f}x, delta={delta:.3f}")
 
-    p_list = p_list_range(-4, -1, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-4, -1, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     if mode == 'plot':
@@ -541,7 +541,7 @@ def do_plot2(output_dir, code_distances, code_distances_th,
     print(f"  2D: Rm={Rm_2d:.6f}, Rc={Rc_2d:.8f}, delta={delta_2d:.3f}")
     print(f"  1D: Rm={Rm_1d:.6f}, Rc={Rc_1d:.8f}, delta={delta_1d:.5f}")
 
-    p_list = p_list_range(-3, -2, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-3, -2, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     if mode == 'plot':
@@ -603,7 +603,7 @@ def do_plot3(output_dir, code_distances, code_distances_th,
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
     print(f"  Pm_raw={PM_RAW:.6f}, Pm_den={PM_DEN:.6f}, atom_loss={ATOM_LOSS:.5f}")
 
-    p_list = p_list_range(-4, -1, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-4, -1, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     if mode == 'plot':
@@ -663,7 +663,7 @@ def do_plot4(output_dir, code_distances, code_distances_th,
     Rm_1d, Rc_1d, delta_1d = get_erasure_params(CSV_1D, delta_1d)
     print(f"  Pm_den={PM_DEN:.6f}, atom_loss={ATOM_LOSS:.5f}")
 
-    p_list = p_list_range(-3, -2, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-3, -2, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     if mode == 'plot':
@@ -790,7 +790,7 @@ def do_plot6(output_dir, code_distances, code_distances_th,
     data_dir = ensure_dir(os.path.join(output_dir, "plot6"))
     Rm, Rc, delta = get_erasure_params(CSV_2D, DELTA_2D)
 
-    p_list = p_list_range(-4, -1, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-4, -1, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     def load_or_run(key, fallback_file, fallback_results, sim_func, label, ckpt_suffix):
@@ -914,7 +914,7 @@ def do_plot7(output_dir, code_distances, code_distances_th,
     print(f"  Pm_raw={PM_RAW_8MS:.6f}, Pm_den={PM_DEN_8MS:.6f}")
     print(f"  Rm={Rm:.6f}, Rc={Rc:.8f}, Rm/Rc={ratio:.0f}x, delta={delta:.3f}")
 
-    p_list = p_list_range(-4, -1, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-4, -1, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     if mode == 'plot':
@@ -975,7 +975,7 @@ def do_plot8(output_dir, code_distances, code_distances_th,
     print(f"  2D: Rm={Rm_2d:.6f}, Rc={Rc_2d:.8f}, delta={delta_2d:.3f}")
     print(f"  1D: Rm={Rm_1d:.6f}, Rc={Rc_1d:.8f}, delta={delta_1d:.5f}")
 
-    p_list = p_list_range(-3, -2, 20 if mode == 'full' else 12)
+    p_list = p_list_range(-3, -2, 30 if mode == 'full' else 12)
     results_file = os.path.join(data_dir, "results.json")
 
     if mode == 'plot':
